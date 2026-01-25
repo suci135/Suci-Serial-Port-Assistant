@@ -2,7 +2,7 @@
 """
 Suci串口助手 - Python 版本
 BaudDance Serial Assistant - Python Version
-
+test
 基于 PyQt6 的现代化串口调试工具，macOS 原生风格
 """
 
