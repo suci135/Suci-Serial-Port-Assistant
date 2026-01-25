@@ -39,3 +39,11 @@ Thumbs.db
 
 # Project specific
 *.log
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+*.manifest
+*.exe
+*.app
