@@ -195,11 +195,20 @@ class MacOSSerialUI(QWidget):
         
         layout.addLayout(toolbar)
         
-        # 数据显示区
+        # 数据显示区 - 使用容器实现圆角
+        display_container = QFrame()
+        display_container.setObjectName("dataDisplayContainer")
+        display_container_layout = QVBoxLayout(display_container)
+        display_container_layout.setContentsMargins(0, 0, 0, 0)
+        display_container_layout.setSpacing(0)
+        
         self.data_display = QTextEdit()
         self.data_display.setObjectName("dataDisplay")
         self.data_display.setReadOnly(True)
-        layout.addWidget(self.data_display)
+        self.data_display.setFrameShape(QFrame.Shape.NoFrame)
+        display_container_layout.addWidget(self.data_display)
+        
+        layout.addWidget(display_container)
         
         # 底部状态栏
         status_bar = QHBoxLayout()
@@ -249,11 +258,22 @@ class MacOSSerialUI(QWidget):
         # input_label.setObjectName("fieldLabel")
         # layout.addWidget(input_label)
         
+        # 创建输入框容器以实现圆角
+        input_container = QFrame()
+        input_container.setObjectName("sendInputContainer")
+        input_container.setMaximumHeight(124)  # 120 + 4 (上下padding)
+        input_container_layout = QVBoxLayout(input_container)
+        input_container_layout.setContentsMargins(0, 0, 0, 0)
+        input_container_layout.setSpacing(0)
+        
         self.send_input = QTextEdit()
         self.send_input.setObjectName("sendInput")
         self.send_input.setPlaceholderText("发送数据...")
         self.send_input.setMaximumHeight(120)
-        layout.addWidget(self.send_input)
+        self.send_input.setFrameShape(QFrame.Shape.NoFrame)
+        input_container_layout.addWidget(self.send_input)
+        
+        layout.addWidget(input_container)
         
         # 发送选项
         options_layout = QHBoxLayout()
@@ -415,23 +435,36 @@ class MacOSSerialUI(QWidget):
                 font-size: 12px;
             }}
             
-            #dataDisplay {{
-                background-color: #000000;
-                color: #ffffff;
+            #dataDisplayContainer {{
+                background-color: #e8e8e8;
                 border: 1px solid #d2d2d7;
-                padding: 12px;
+                border-radius: 12px;
+                padding: 3px;
+            }}
+            
+            #dataDisplay {{
+                background-color: #e8e8e8;
+                color: #ffffff;
+                border: none;
+                padding: 10px;
                 line-height: 1.5;
+            }}
+            
+            #sendInputContainer {{
+                background-color: #ffffff;
+                border: 1px solid #d2d2d7;
+                border-radius: 8px;
+                padding: 2px;
             }}
             
             #sendInput {{
                 background-color: #ffffff;
-                border: 1px solid #d2d2d7;
-                border-radius: 6px;
-                padding: 8px;
+                border: none;
+                padding: 6px;
             }}
             
             #sendInput:focus {{
-                border-color: #0071e3;
+                border: none;
             }}
             
             #historyList {{

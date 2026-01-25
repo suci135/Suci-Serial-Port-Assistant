@@ -6,12 +6,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('src/resource/Assistant.png', 'src/resource'),
-        ('src/resource/triangle.png', 'src/resource'),
-        ('src/resource/fzzyjt.ttf', 'src/resource'),
-        ('src/resource/triangle.png', 'src/resource'),
-    ],
+    datas=[],  # 不打包到内部
     hiddenimports=[
         'PyQt6.QtCore',
         'PyQt6.QtGui',
@@ -35,10 +30,8 @@ pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
     [],
+    exclude_binaries=True,  # 改为文件夹模式
     name='Suci串口助手',
     debug=False,
     bootloader_ignore_signals=False,
@@ -46,11 +39,23 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # 不显示控制台窗口
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='src/resource/Assistant.png',  # 应用图标
+    icon='src/resource/Assistant.png',
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    Tree('src/resource', prefix='src/resource'),  # 复制整个资源文件夹
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    name='Suci串口助手',
 )
