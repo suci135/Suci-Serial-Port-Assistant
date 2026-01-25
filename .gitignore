@@ -49,7 +49,7 @@ dist/
 *.app
 
 # Build and guide files
-BUILD_GUIDE.md
-UPLOAD_GUIDE.md
-build.spec
-build.bat
+#BUILD_GUIDE.md
+#UPLOAD_GUIDE.md
+#build.spec
+#build.bat
