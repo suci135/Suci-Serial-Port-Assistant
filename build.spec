@@ -10,6 +10,7 @@ a = Analysis(
         ('src/resource/Assistant.png', 'src/resource'),
         ('src/resource/triangle.png', 'src/resource'),
         ('src/resource/fzzyjt.ttf', 'src/resource'),
+        ('src/resource/triangle.png', 'src/resource'),
     ],
     hiddenimports=[
         'PyQt6.QtCore',
