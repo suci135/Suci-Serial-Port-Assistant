@@ -1,0 +1,237 @@
+"""
+串口管理器
+"""
+
+import asyncio
+import serial
+import serial.tools.list_ports
+from typing import List, Optional, Callable, Dict, Any
+from PyQt6.QtCore import QObject, pyqtSignal
+import threading
+import time
+
+
+class SerialDevice:
+    """串口设备信息"""
+    
+    def __init__(self, port_info):
+        self.port = port_info.device
+        self.description = port_info.description
+        self.hwid = port_info.hwid
+        self.vid = port_info.vid
+        self.pid = port_info.pid
+        self.serial_number = port_info.serial_number
+        self.manufacturer = port_info.manufacturer
+        self.product = port_info.product
+    
+    @property
+    def display_name(self) -> str:
+        """显示名称"""
+        if self.description and self.description != "n/a":
+            return f"{self.port} - {self.description}"
+        return self.port
+    
+    def __str__(self):
+        return self.display_name
+
+
+class SerialManager(QObject):
+    """串口管理器"""
+    
+    # 信号定义
+    device_connected = pyqtSignal()
+    device_disconnected = pyqtSignal()
+    data_received = pyqtSignal(bytes)
+    error_occurred = pyqtSignal(str)
+    
+    def __init__(self):
+        super().__init__()
+        self._serial: Optional[serial.Serial] = None
+        self._is_connected = False
+        self._read_thread: Optional[threading.Thread] = None
+        self._stop_reading = threading.Event()
+        self._config = {
+            'baudrate': 9600,
+            'bytesize': serial.EIGHTBITS,
+            'parity': serial.PARITY_NONE,
+            'stopbits': serial.STOPBITS_ONE,
+            'timeout': 1.0,
+            'xonxoff': False,
+            'rtscts': False,
+            'dsrdtr': False
+        }
+    
+    @staticmethod
+    def list_devices() -> List[SerialDevice]:
+        """列出所有可用的串口设备"""
+        ports = serial.tools.list_ports.comports()
+        return [SerialDevice(port) for port in ports]
+    
+    def configure(self, config: Dict[str, Any]):
+        """配置串口参数"""
+        # 映射配置参数
+        if 'baud_rate' in config:
+            self._config['baudrate'] = config['baud_rate']
+        
+        if 'data_bits' in config:
+            data_bits_map = {5: serial.FIVEBITS, 6: serial.SIXBITS, 
+                           7: serial.SEVENBITS, 8: serial.EIGHTBITS}
+            self._config['bytesize'] = data_bits_map.get(config['data_bits'], serial.EIGHTBITS)
+        
+        if 'parity' in config:
+            parity_map = {'None': serial.PARITY_NONE, 'Even': serial.PARITY_EVEN,
+                         'Odd': serial.PARITY_ODD, 'Mark': serial.PARITY_MARK,
+                         'Space': serial.PARITY_SPACE}
+            self._config['parity'] = parity_map.get(config['parity'], serial.PARITY_NONE)
+        
+        if 'stop_bits' in config:
+            stop_bits_map = {1: serial.STOPBITS_ONE, 1.5: serial.STOPBITS_ONE_POINT_FIVE,
+                           2: serial.STOPBITS_TWO}
+            self._config['stopbits'] = stop_bits_map.get(config['stop_bits'], serial.STOPBITS_ONE)
+        
+        if 'flow_control' in config:
+            flow_control = config['flow_control']
+            self._config['xonxoff'] = flow_control == 'XON/XOFF'
+            self._config['rtscts'] = flow_control == 'RTS/CTS'
+            self._config['dsrdtr'] = flow_control == 'DSR/DTR'
+        
+        if 'read_timeout' in config:
+            self._config['timeout'] = config['read_timeout']
+    
+    def connect(self, port: str) -> bool:
+        """连接到指定串口"""
+        if self._is_connected:
+            self.disconnect()
+        
+        try:
+            self._serial = serial.Serial(port, **self._config)
+            self._is_connected = True
+            self._start_reading()
+            self.device_connected.emit()
+            return True
+        except serial.SerialException as e:
+            self.error_occurred.emit(f"连接串口失败: {str(e)}")
+            return False
+    
+    def disconnect(self):
+        """断开串口连接"""
+        if not self._is_connected:
+            return
+        
+        self._is_connected = False
+        self._stop_reading.set()
+        
+        if self._read_thread and self._read_thread.is_alive():
+            self._read_thread.join(timeout=2.0)
+        
+        if self._serial and self._serial.is_open:
+            self._serial.close()
+        
+        self._serial = None
+        self._stop_reading.clear()
+        self.device_disconnected.emit()
+    
+    def _start_reading(self):
+        """启动数据读取线程"""
+        self._stop_reading.clear()
+        self._read_thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._read_thread.start()
+    
+    def _read_loop(self):
+        """数据读取循环"""
+        buffer = bytearray()
+        last_data_time = time.time()
+        
+        while not self._stop_reading.is_set() and self._is_connected:
+            try:
+                if self._serial and self._serial.in_waiting > 0:
+                    data = self._serial.read(self._serial.in_waiting)
+                    if data:
+                        buffer.extend(data)
+                        last_data_time = time.time()
+                
+                # 如果缓冲区有数据且超过一定时间没有新数据，则发送缓冲区数据
+                current_time = time.time()
+                if buffer and (current_time - last_data_time) > 0.01:  # 10ms 超时
+                    self.data_received.emit(bytes(buffer))
+                    buffer.clear()
+                
+                time.sleep(0.001)  # 1ms 延迟
+                
+            except serial.SerialException as e:
+                if self._is_connected:  # 只有在连接状态下才报告错误
+                    self.error_occurred.emit(f"读取数据失败: {str(e)}")
+                break
+            except Exception as e:
+                if self._is_connected:
+                    self.error_occurred.emit(f"未知错误: {str(e)}")
+                break
+        
+        # 发送剩余缓冲区数据
+        if buffer:
+            self.data_received.emit(bytes(buffer))
+    
+    def send_data(self, data: bytes) -> bool:
+        """发送数据"""
+        if not self._is_connected or not self._serial:
+            self.error_occurred.emit("设备未连接")
+            return False
+        
+        try:
+            bytes_written = self._serial.write(data)
+            self._serial.flush()
+            return bytes_written == len(data)
+        except serial.SerialException as e:
+            self.error_occurred.emit(f"发送数据失败: {str(e)}")
+            return False
+    
+    def send_hex_string(self, hex_string: str) -> bool:
+        """发送十六进制字符串"""
+        try:
+            # 移除空格和非十六进制字符
+            hex_string = ''.join(c for c in hex_string if c in '0123456789ABCDEFabcdef')
+            if len(hex_string) % 2 != 0:
+                hex_string = '0' + hex_string  # 补齐奇数长度
+            
+            data = bytes.fromhex(hex_string)
+            return self.send_data(data)
+        except ValueError as e:
+            self.error_occurred.emit(f"十六进制格式错误: {str(e)}")
+            return False
+    
+    def send_text(self, text: str, encoding: str = 'utf-8') -> bool:
+        """发送文本数据"""
+        try:
+            data = text.encode(encoding)
+            return self.send_data(data)
+        except UnicodeEncodeError as e:
+            self.error_occurred.emit(f"文本编码失败: {str(e)}")
+            return False
+    
+    @property
+    def is_connected(self) -> bool:
+        """是否已连接"""
+        return self._is_connected
+    
+    @property
+    def current_port(self) -> Optional[str]:
+        """当前连接的端口"""
+        return self._serial.port if self._serial else None
+    
+    @property
+    def connection_info(self) -> Dict[str, Any]:
+        """连接信息"""
+        if not self._is_connected or not self._serial:
+            return {}
+        
+        return {
+            'port': self._serial.port,
+            'baudrate': self._serial.baudrate,
+            'bytesize': self._serial.bytesize,
+            'parity': self._serial.parity,
+            'stopbits': self._serial.stopbits,
+            'timeout': self._serial.timeout,
+            'xonxoff': self._serial.xonxoff,
+            'rtscts': self._serial.rtscts,
+            'dsrdtr': self._serial.dsrdtr
+        }
