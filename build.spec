@@ -6,7 +6,11 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],  # 不打包到内部
+    datas=[
+        ('src/resource/*.png', 'src/resource'),
+        ('src/resource/*.ttf', 'src/resource'),
+        ('quick_commands.json', '.'),
+    ],
     hiddenimports=[
         'PyQt6.QtCore',
         'PyQt6.QtGui',
@@ -53,7 +57,6 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    Tree('src/resource', prefix='src/resource'),  # 打包资源文件
     strip=False,
     upx=True,
     upx_exclude=[],

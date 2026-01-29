@@ -16,7 +16,10 @@ pyinstaller build.spec --clean
 echo.
 
 if %errorlevel% equ 0 (
-    echo [3/4] 复制配置文件...
+    echo [3/4] 复制资源文件到正确位置...
+    if not exist "dist\Suci串口助手\src\resource" mkdir "dist\Suci串口助手\src\resource"
+    copy "src\resource\*.png" "dist\Suci串口助手\src\resource\" >nul
+    copy "src\resource\*.ttf" "dist\Suci串口助手\src\resource\" >nul
     if exist quick_commands.json copy quick_commands.json "dist\Suci串口助手\" >nul
     echo 完成！
     echo.
