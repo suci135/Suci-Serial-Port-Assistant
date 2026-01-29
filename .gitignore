@@ -80,3 +80,8 @@ coverage.xml
 # Windows specific
 *.lnk
 desktop.ini
+
+# Images and screenshots (allow tracking)
+# *.png - commented out to allow screenshots and images to be tracked
+# *.jpg - commented out to allow screenshots and images to be tracked
+# *.jpeg - commented out to allow screenshots and images to be tracked

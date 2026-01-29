@@ -1,0 +1,42 @@
+[
+    {
+        "name": "重启模块",
+        "command": "AT+RST",
+        "description": "重启模块",
+        "enabled": true,
+        "delay": 1000,
+        "is_hex": false
+    },
+    {
+        "name": "查询版本信息",
+        "command": "AT+GMR",
+        "description": "查询版本信息",
+        "enabled": true,
+        "delay": 1000,
+        "is_hex": false
+    },
+    {
+        "name": "扫描WiFi热点",
+        "command": "AT+CWLAP",
+        "description": "扫描WiFi热点",
+        "enabled": true,
+        "delay": 1000,
+        "is_hex": false
+    },
+    {
+        "name": "HEX测试数据",
+        "command": "01 02 03 04",
+        "description": "HEX测试数据",
+        "enabled": false,
+        "delay": 1000,
+        "is_hex": true
+    },
+    {
+        "name": "连接WiFi网络",
+        "command": "AT+CWJAP=\"SSID\",\"PASS\"",
+        "description": "连接WiFi网络",
+        "enabled": false,
+        "delay": 1000,
+        "is_hex": false
+    }
+]

@@ -67,6 +67,12 @@ class MainWindow(QMainWindow):
         # 保存窗口默认大小和位置
         self.default_geometry = self.geometry()
         self.is_fullscreen = False
+        
+        # 创建动画对象
+        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
+        self.resize_animation = QPropertyAnimation(self, b"geometry")
+        self.resize_animation.setDuration(300)  # 300ms动画时长
+        self.resize_animation.setEasingCurve(QEasingCurve.Type.OutCubic)  # 平滑缓动曲线
     
     def apply_window_style(self):
         """应用窗口样式"""
@@ -181,7 +187,7 @@ class MainWindow(QMainWindow):
         
         # 左侧按钮组容器
         left_buttons = QWidget()
-        left_buttons.setFixedWidth(219)
+        left_buttons.setFixedWidth(179)  # 从219减少到179，匹配左侧边栏宽度
         left_layout = QHBoxLayout(left_buttons)
         left_layout.setContentsMargins(12, 0, 12, 0)
         left_layout.setSpacing(8)
@@ -230,7 +236,7 @@ class MainWindow(QMainWindow):
         
         # 右侧按钮组容器
         right_buttons = QWidget()
-        right_buttons.setFixedWidth(240)  # 240是右侧边栏宽度
+        right_buttons.setFixedWidth(350)  # 匹配新的右侧边栏宽度
         right_layout = QHBoxLayout(right_buttons)
         right_layout.setContentsMargins(12, 0, 12, 0)
         right_layout.setSpacing(8)
@@ -267,18 +273,29 @@ class MainWindow(QMainWindow):
         return title_bar
     
     def toggle_maximize(self):
-        """切换全屏状态"""
+        """切换全屏状态 - 带平滑动画"""
+        from PyQt6.QtCore import QRect
+        from PyQt6.QtWidgets import QApplication
+        
         if self.is_fullscreen:
-            # 恢复到默认大小
-            self.setGeometry(self.default_geometry)
-            self.is_fullscreen = False
+            # 恢复到默认大小 - 带动画
+            self.resize_animation.setStartValue(self.geometry())
+            self.resize_animation.setEndValue(self.default_geometry)
+            self.resize_animation.finished.connect(lambda: setattr(self, 'is_fullscreen', False))
+            self.resize_animation.start()
         else:
             # 保存当前大小和位置作为默认值
             if not self.isMaximized() and not self.isFullScreen():
                 self.default_geometry = self.geometry()
-            # 进入全屏
-            self.showFullScreen()
-            self.is_fullscreen = True
+            
+            # 获取屏幕尺寸
+            screen = QApplication.primaryScreen().availableGeometry()
+            
+            # 进入全屏 - 带动画
+            self.resize_animation.setStartValue(self.geometry())
+            self.resize_animation.setEndValue(screen)
+            self.resize_animation.finished.connect(lambda: setattr(self, 'is_fullscreen', True))
+            self.resize_animation.start()
     
     def mousePressEvent(self, event):
         """鼠标按下事件 - 用于拖动窗口"""
@@ -308,7 +325,7 @@ def main():
     
     # 设置字体
     from PyQt6.QtGui import QFontDatabase
-    font_id = QFontDatabase.addApplicationFont("src/resource/ZiTiGuanJiaFangSongTi-2.ttf")
+    font_id = QFontDatabase.addApplicationFont("src/resource/AlimamaFangYuanTiVF-Thin-2.ttf")
     if font_id != -1:
         font_families = QFontDatabase.applicationFontFamilies(font_id)
         if font_families:
