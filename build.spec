@@ -45,7 +45,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='src/resource/Assistant.png',
+    icon='src/resource/Assistant.png',  # PNG不能作为图标，需要.ico文件
 )
 
 coll = COLLECT(
@@ -53,7 +53,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    Tree('src/resource', prefix='src/resource'),  # 复制整个资源文件夹
+    Tree('src/resource', prefix='src/resource'),  # 打包资源文件
     strip=False,
     upx=True,
     upx_exclude=[],
