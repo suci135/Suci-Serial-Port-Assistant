@@ -28,6 +28,9 @@ class MacOSSerialUI(QWidget):
         self.received_count = 0
         self.received_bytes = 0
         
+        # 黑夜模式状态
+        self.is_dark_mode = False
+        
         self.init_ui()
         self.apply_macos_style()
         self.connect_signals()
@@ -293,13 +296,47 @@ class MacOSSerialUI(QWidget):
         
         layout.addStretch()
         
+        # 底部按钮区域
+        bottom_buttons = QHBoxLayout()
+        bottom_buttons.setSpacing(8)
+        bottom_buttons.addStretch()
+        
+        # GitHub 按钮
+        self.github_btn = QPushButton()
+        self.github_btn.setObjectName("githubButton")
+        self.github_btn.setFixedSize(32, 32)
+        self.github_btn.setToolTip("访问 GitHub 仓库")
+        self.github_btn.clicked.connect(self.open_github)
+        self.github_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # 设置 GitHub 图标
+        from PyQt6.QtGui import QIcon
+        self.github_btn.setIcon(QIcon("src/resource/GitHub.png"))
+        self.github_btn.setIconSize(QSize(20, 20))
+        
+        # 黑夜模式按钮
+        self.dark_mode_btn = QPushButton()
+        self.dark_mode_btn.setObjectName("darkModeButton")
+        self.dark_mode_btn.setFixedSize(32, 32)
+        self.dark_mode_btn.setToolTip("切换黑夜模式")
+        self.dark_mode_btn.clicked.connect(self.toggle_dark_mode)
+        self.dark_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # 设置黑夜模式图标
+        self.dark_mode_btn.setIcon(QIcon("src/resource/dark.png"))
+        self.dark_mode_btn.setIconSize(QSize(20, 20))
+        
+        bottom_buttons.addWidget(self.github_btn)
+        bottom_buttons.addWidget(self.dark_mode_btn)
+        layout.addLayout(bottom_buttons)
+        
         return sidebar
 
     def apply_macos_style(self):
         """应用 macOS 风格样式"""
         # 加载字体
         from PyQt6.QtGui import QFontDatabase
-        font_id = QFontDatabase.addApplicationFont("src/resource/fzzyjt.ttf")
+        font_id = QFontDatabase.addApplicationFont("src/resource/ZiTiGuanJiaFangSongTi-2.ttf")
         if font_id != -1:
             font_families = QFontDatabase.applicationFontFamilies(font_id)
             if font_families:
@@ -309,19 +346,41 @@ class MacOSSerialUI(QWidget):
         else:
             font_family = "Microsoft YaHei"
         
+        # 根据模式选择颜色
+        if self.is_dark_mode:
+            # 黑夜模式颜色
+            bg_color = "#1e1e1e"
+            sidebar_bg = "#2d2d2d"
+            text_color = "#ffffff"
+            border_color = "#404040"
+            display_bg = "#1a1a1a"
+            display_text = "#ffffff"
+            button_bg = "#404040"
+        else:
+            # 日间模式颜色
+            bg_color = "#ffffff"
+            sidebar_bg = "#f5f5f7"
+            text_color = "#1d1d1f"
+            border_color = "#d2d2d7"
+            display_bg = "#e8e8e8"
+            display_text = "#ffffff"
+            button_bg = "#f5f5f7"
+        
         self.setStyleSheet(f"""
             QWidget {{
-                color: #1d1d1f;
+                color: {text_color};
                 font-family: "{font_family}";
+                font-weight: bold;
             }}
             
             QLabel, QPushButton, QComboBox, QCheckBox, QTextEdit {{
                 font-family: "{font_family}";
+                font-weight: bold;
             }}
             
             #leftSidebar, #rightSidebar {{
-                background-color: #f5f5f7;
-                border-right: 1px solid #d2d2d7;
+                background-color: {sidebar_bg};
+                border-right: 1px solid {border_color};
             }}
             
             #leftSidebar {{
@@ -333,17 +392,17 @@ class MacOSSerialUI(QWidget):
             }}
             
             #titleBottomSeparator {{
-                background-color: #d2d2d7;
+                background-color: {border_color};
                 border: none;
             }}
             
             #centerRightSeparator {{
-                background-color: #d2d2d7;
+                background-color: {border_color};
                 border: none;
             }}
             
             #centerContent {{
-                background-color: #EEEEF0;
+                background-color: {bg_color};
             }}
             
             #sidebarTitle {{
@@ -360,8 +419,9 @@ class MacOSSerialUI(QWidget):
             }}
             
             QComboBox {{
-                background-color: #ffffff;
-                border: 1px solid #d2d2d7;
+                background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
                 border-radius: 6px;
                 padding: 6px 10px;
                 padding-right: 30px;
@@ -385,6 +445,15 @@ class MacOSSerialUI(QWidget):
                 height: 12px;
             }}
             
+            QComboBox QAbstractItemView {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                selection-background-color: #0071e3;
+                selection-color: white;
+            }}
+            
             #primaryButton {{
                 background-color: #0071e3;
                 color: white;
@@ -403,14 +472,14 @@ class MacOSSerialUI(QWidget):
             }}
             
             #primaryButton:disabled {{
-                background-color: #d2d2d7;
+                background-color: {border_color};
                 color: #86868b;
             }}
             
             #secondaryButton {{
-                background-color: #f5f5f7;
-                color: #1d1d1f;
-                border: 1px solid #d2d2d7;
+                background-color: {button_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
                 border-radius: 6px;
                 padding: 6px 12px;
             }}
@@ -420,8 +489,8 @@ class MacOSSerialUI(QWidget):
             }}
             
             #statusFrame {{
-                background-color: #ffffff;
-                border: 1px solid #d2d2d7;
+                background-color: {bg_color};
+                border: 1px solid {border_color};
                 border-radius: 6px;
             }}
             
@@ -436,29 +505,30 @@ class MacOSSerialUI(QWidget):
             }}
             
             #dataDisplayContainer {{
-                background-color: #e8e8e8;
-                border: 1px solid #d2d2d7;
+                background-color: {display_bg};
+                border: 1px solid {border_color};
                 border-radius: 12px;
                 padding: 3px;
             }}
             
             #dataDisplay {{
-                background-color: #e8e8e8;
-                color: #ffffff;
+                background-color: {display_bg};
+                color: {display_text};
                 border: none;
                 padding: 10px;
                 line-height: 1.5;
             }}
             
             #sendInputContainer {{
-                background-color: #ffffff;
-                border: 1px solid #d2d2d7;
+                background-color: {bg_color};
+                border: 1px solid {border_color};
                 border-radius: 8px;
                 padding: 2px;
             }}
             
             #sendInput {{
-                background-color: #ffffff;
+                background-color: {bg_color};
+                color: {text_color};
                 border: none;
                 padding: 6px;
             }}
@@ -468,8 +538,8 @@ class MacOSSerialUI(QWidget):
             }}
             
             #historyList {{
-                background-color: #ffffff;
-                border: 1px solid #d2d2d7;
+                background-color: {bg_color};
+                border: 1px solid {border_color};
                 border-radius: 6px;
                 padding: 4px;
             }}
@@ -495,9 +565,9 @@ class MacOSSerialUI(QWidget):
             QCheckBox::indicator {{
                 width: 16px;
                 height: 16px;
-                border: 1px solid #d2d2d7;
+                border: 1px solid {border_color};
                 border-radius: 4px;
-                background-color: #ffffff;
+                background-color: {bg_color};
             }}
             
             QCheckBox::indicator:checked {{
@@ -507,13 +577,28 @@ class MacOSSerialUI(QWidget):
             }}
             
             #separator {{
-                background-color: #d2d2d7;
+                background-color: {border_color};
                 max-height: 1px;
             }}
             
             #statsLabel {{
                 color: #86868b;
                 font-size: 12px;
+            }}
+            
+            #darkModeButton, #githubButton {{
+                background-color: {button_bg};
+                border: 1px solid {border_color};
+                border-radius: 16px;
+                padding: 6px;
+            }}
+            
+            #darkModeButton:hover, #githubButton:hover {{
+                background-color: {border_color};
+            }}
+            
+            #darkModeButton:pressed, #githubButton:pressed {{
+                background-color: {border_color};
             }}
         """)
     
@@ -662,6 +747,24 @@ class MacOSSerialUI(QWidget):
         """更新统计信息"""
         self.sent_stats.setText(f"发送: {self.sent_count} ({self.sent_bytes} 字节)")
         self.received_stats.setText(f"接收: {self.received_count} ({self.received_bytes} 字节)")
+    
+    def toggle_dark_mode(self):
+        """切换黑夜模式"""
+        self.is_dark_mode = not self.is_dark_mode
+        print(f"黑夜模式: {self.is_dark_mode}")  # 调试信息
+        self.apply_macos_style()  # 重新应用样式
+        
+        # 通知主窗口更新样式
+        main_window = self.parent()
+        while main_window and not hasattr(main_window, 'apply_window_style'):
+            main_window = main_window.parent()
+        if main_window:
+            main_window.update_theme(self.is_dark_mode)
+    
+    def open_github(self):
+        """打开 GitHub 仓库"""
+        import webbrowser
+        webbrowser.open("https://github.com/suci135/Suci-Serial-Port-Assistant")
     
     def show_macos_alert(self, title: str, message: str):
         """显示 macOS 风格的提示框"""

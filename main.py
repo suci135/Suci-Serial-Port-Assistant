@@ -78,6 +78,62 @@ class MainWindow(QMainWindow):
             }
         """)
     
+    def update_theme(self, is_dark_mode):
+        """更新主题"""
+        if is_dark_mode:
+            # 黑夜模式
+            bg_color = "#1e1e1e"
+            border_color = "#404040"
+            title_bg = "#2d2d2d"
+        else:
+            # 日间模式
+            bg_color = "#F5F5F7"
+            border_color = "#d2d2d7"
+            title_bg = "#F5F5F7"
+        
+        self.setStyleSheet(f"""
+            #mainContainer {{
+                background: {bg_color};
+                border: 1px solid {border_color};
+                border-radius: 10px;
+            }}
+        """)
+        
+        # 更新标题栏样式
+        self.title_bar.setStyleSheet(f"""
+            #titleBar {{
+                background-color: {title_bg};
+                border-top-left-radius: 10px;
+                border-top-right-radius: 10px;
+            }}
+            .macButton {{
+                width: 12px;
+                height: 12px;
+                border-radius: 6px;
+                border: none;
+            }}
+            .macButton:hover {{
+                opacity: 0.8;
+            }}
+            #closeBtn {{
+                background-color: #ED6A5E;
+            }}
+            #minimizeBtn {{
+                background-color: #F4BF4F;
+            }}
+            #maximizeBtn {{
+                background-color: #61C554;
+            }}
+            #titleLabel {{
+                color: {"#ffffff" if is_dark_mode else "#1d1d1f"};
+                font-weight: 500;
+            }}
+            #titleSeparator {{
+                background-color: {border_color};
+                border: none;
+            }}
+        """)
+    
     def create_title_bar(self):
         """创建自定义标题栏"""
         from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QFrame
@@ -252,7 +308,7 @@ def main():
     
     # 设置字体
     from PyQt6.QtGui import QFontDatabase
-    font_id = QFontDatabase.addApplicationFont("src/resource/fzzyjt.ttf")
+    font_id = QFontDatabase.addApplicationFont("src/resource/ZiTiGuanJiaFangSongTi-2.ttf")
     if font_id != -1:
         font_families = QFontDatabase.applicationFontFamilies(font_id)
         if font_families:
