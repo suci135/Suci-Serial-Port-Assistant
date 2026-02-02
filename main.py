@@ -33,7 +33,7 @@ class MainWindow(QMainWindow):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         
         # 设置窗口
-        self.setWindowTitle("Suci的串口助手")
+        self.setWindowTitle("Suci的串口/蓝牙助手")
         self.setMinimumSize(900, 600)
         self.resize(1100, 700)
         
@@ -229,7 +229,7 @@ class MainWindow(QMainWindow):
         
         # 中间标题
         layout.addStretch()
-        title_label = QLabel("Suci的串口助手")
+        title_label = QLabel("Suci的串口/蓝牙助手")
         title_label.setObjectName("titleLabel")
         layout.addWidget(title_label)
         layout.addStretch()

@@ -38,5 +38,13 @@
         "enabled": false,
         "delay": 1000,
         "is_hex": false
+    },
+    {
+        "name": "自定义命令6",
+        "command": "@SHUIJIAO#$",
+        "description": "睡觉",
+        "enabled": true,
+        "delay": 1000,
+        "is_hex": false
     }
 ]

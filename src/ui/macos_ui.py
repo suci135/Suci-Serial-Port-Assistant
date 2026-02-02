@@ -1,10 +1,11 @@
 """
-macOS 原生风格串口调试工具 UI - 仅支持串口
+macOS 原生风格串口调试工具 UI - 支持串口和蓝牙
 严格遵循 macOS Human Interface Guidelines
 """
 
 import json
 import os
+from typing import List
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtGui import *
@@ -12,17 +13,23 @@ from datetime import datetime
 
 from ..core.app_config import AppConfig
 from ..core.serial_manager import SerialManager, SerialDevice
+from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
 
 
 class MacOSSerialUI(QWidget):
     """macOS 风格串口调试助手主界面"""
     
     data_sent = pyqtSignal(bytes)
+    display_sent_signal = pyqtSignal(str, str)  # 新增信号：用于显示发送的数据
     
     def __init__(self, config: AppConfig, serial_mgr: SerialManager):
         super().__init__()
         self.config = config
         self.serial_manager = serial_mgr
+        self.bluetooth_manager = BluetoothManager()
+        
+        # 当前模式：'serial' 或 'bluetooth'
+        self.current_mode = 'serial'
         
         # 统计数据
         self.sent_count = 0
@@ -39,10 +46,15 @@ class MacOSSerialUI(QWidget):
         # 快捷输入数据 - 从配置文件加载
         self.quick_commands = self.load_quick_commands()
         
+        # 连接动画定时器
+        self.connecting_timer = QTimer()
+        self.connecting_timer.timeout.connect(self.update_connecting_animation)
+        self.connecting_dots = 0
+        
         self.init_ui()
         self.apply_macos_style()
         self.connect_signals()
-        self.refresh_ports()
+        self.refresh_devices()
     
     def init_ui(self):
         """初始化 UI"""
@@ -104,58 +116,126 @@ class MacOSSerialUI(QWidget):
         main_layout.addLayout(content_layout)
 
     def create_left_sidebar(self):
-        """创建左侧边栏 - 串口连接设置"""
+        """创建左侧边栏 - 串口/蓝牙连接设置"""
         sidebar = QFrame()
         sidebar.setObjectName("leftSidebar")
-        sidebar.setFixedWidth(179)  # 增加宽度，让左边区域更宽
+        sidebar.setFixedWidth(179)
         
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(10, 20, 10, 20)  # 进一步减少左右边距
-        layout.setSpacing(10)  # 减少间距
+        layout.setContentsMargins(10, 20, 10, 20)
+        layout.setSpacing(10)
         
-        # Port
-        port_label = QLabel("端口")
-        port_label.setObjectName("compactLabel")
-        layout.addWidget(port_label)
+        # 模式选择
+        mode_label = QLabel("模式")
+        mode_label.setObjectName("compactLabel")
+        layout.addWidget(mode_label)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["串口", "蓝牙"])
+        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        layout.addWidget(self.mode_combo)
+        
+        # 设备选择
+        device_label = QLabel("设备")
+        device_label.setObjectName("compactLabel")
+        layout.addWidget(device_label)
+        
+        # 设备选择容器（包含下拉框和刷新按钮）
+        device_container = QHBoxLayout()
+        device_container.setSpacing(5)
+        
         self.port_combo = QComboBox()
-        layout.addWidget(self.port_combo)
+        device_container.addWidget(self.port_combo, 1)
+        
+        # 刷新/扫描按钮
+        self.refresh_btn = QPushButton("⟳")
+        self.refresh_btn.setObjectName("refreshButton")
+        self.refresh_btn.setFixedSize(32, 32)
+        self.refresh_btn.setToolTip("刷新设备列表")
+        self.refresh_btn.clicked.connect(self.refresh_devices)
+        self.refresh_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        device_container.addWidget(self.refresh_btn)
+        
+        layout.addLayout(device_container)
+        
+        # 串口配置区域（容器）
+        self.serial_config_widget = QWidget()
+        serial_config_layout = QVBoxLayout(self.serial_config_widget)
+        serial_config_layout.setContentsMargins(0, 0, 0, 0)
+        serial_config_layout.setSpacing(10)
         
         # Baud Rate
         baud_label = QLabel("波特率")
         baud_label.setObjectName("compactLabel")
-        layout.addWidget(baud_label)
+        serial_config_layout.addWidget(baud_label)
         self.baud_combo = QComboBox()
         self.baud_combo.setEditable(True)
         self.baud_combo.addItems(["9600", "19200", "38400", "57600", "115200"])
         self.baud_combo.setCurrentText("9600")
-        layout.addWidget(self.baud_combo)
+        serial_config_layout.addWidget(self.baud_combo)
         
         # Data Bits
         data_label = QLabel("数据位")
         data_label.setObjectName("compactLabel")
-        layout.addWidget(data_label)
+        serial_config_layout.addWidget(data_label)
         self.data_bits_combo = QComboBox()
         self.data_bits_combo.addItems(["5", "6", "7", "8"])
         self.data_bits_combo.setCurrentText("8")
-        layout.addWidget(self.data_bits_combo)
+        serial_config_layout.addWidget(self.data_bits_combo)
         
         # Stop Bits
         stop_label = QLabel("停止位")
         stop_label.setObjectName("compactLabel")
-        layout.addWidget(stop_label)
+        serial_config_layout.addWidget(stop_label)
         self.stop_bits_combo = QComboBox()
         self.stop_bits_combo.addItems(["1", "1.5", "2"])
         self.stop_bits_combo.setCurrentText("1")
-        layout.addWidget(self.stop_bits_combo)
+        serial_config_layout.addWidget(self.stop_bits_combo)
         
         # Parity
         parity_label = QLabel("校验位")
         parity_label.setObjectName("compactLabel")
-        layout.addWidget(parity_label)
+        serial_config_layout.addWidget(parity_label)
         self.parity_combo = QComboBox()
         self.parity_combo.addItems(["None", "Even", "Odd"])
         self.parity_combo.setCurrentText("None")
-        layout.addWidget(self.parity_combo)
+        serial_config_layout.addWidget(self.parity_combo)
+        
+        layout.addWidget(self.serial_config_widget)
+        
+        # 蓝牙配置区域（容器）
+        self.bluetooth_config_widget = QWidget()
+        bluetooth_config_layout = QVBoxLayout(self.bluetooth_config_widget)
+        bluetooth_config_layout.setContentsMargins(0, 0, 0, 0)
+        bluetooth_config_layout.setSpacing(10)
+        
+        # PyBluez 配置（经典蓝牙）
+        self.pybluez_config_widget = QWidget()
+        pybluez_config_layout = QVBoxLayout(self.pybluez_config_widget)
+        pybluez_config_layout.setContentsMargins(0, 0, 0, 0)
+        pybluez_config_layout.setSpacing(10)
+        
+        # RFCOMM端口
+        port_label = QLabel("RFCOMM端口")
+        port_label.setObjectName("compactLabel")
+        pybluez_config_layout.addWidget(port_label)
+        self.rfcomm_port_spin = QSpinBox()
+        self.rfcomm_port_spin.setRange(1, 30)
+        self.rfcomm_port_spin.setValue(1)
+        pybluez_config_layout.addWidget(self.rfcomm_port_spin)
+        
+        bluetooth_config_layout.addWidget(self.pybluez_config_widget)
+        
+        # 蓝牙提示信息
+        bt_info = QLabel()
+        bt_info.setObjectName("infoLabel")
+        bt_info.setWordWrap(True)
+        self.bt_info_label = bt_info
+        bluetooth_config_layout.addWidget(bt_info)
+        
+        layout.addWidget(self.bluetooth_config_widget)
+        
+        # 默认隐藏蓝牙配置
+        self.bluetooth_config_widget.hide()
         
         layout.addStretch()
         
@@ -203,7 +283,8 @@ class MacOSSerialUI(QWidget):
         self.format_combo = QComboBox()
         self.format_combo.addItems(["HEX", "ASCII", "UTF-8"])
         self.format_combo.setCurrentText("HEX")
-        self.format_combo.setMaximumWidth(100)
+        self.format_combo.setMinimumWidth(120)
+        self.format_combo.setMaximumWidth(150)
         toolbar.addWidget(self.format_combo)
         
         toolbar.addSpacing(16)
@@ -211,6 +292,7 @@ class MacOSSerialUI(QWidget):
         # 时间戳
         self.timestamp_check = QCheckBox("显示时间戳")
         self.timestamp_check.setChecked(True)
+        self.timestamp_check.stateChanged.connect(self.toggle_timestamps)
         toolbar.addWidget(self.timestamp_check)
         
         # 自动滚动
@@ -228,18 +310,31 @@ class MacOSSerialUI(QWidget):
         
         layout.addLayout(toolbar)
         
-        # 数据显示区 - 使用容器实现圆角
+        # 数据显示区 - 使用 QScrollArea + QWidget 实现气泡效果
         display_container = QFrame()
         display_container.setObjectName("dataDisplayContainer")
         display_container_layout = QVBoxLayout(display_container)
         display_container_layout.setContentsMargins(0, 0, 0, 0)
         display_container_layout.setSpacing(0)
         
-        self.data_display = QTextEdit()
-        self.data_display.setObjectName("dataDisplay")
-        self.data_display.setReadOnly(True)
-        self.data_display.setFrameShape(QFrame.Shape.NoFrame)
-        display_container_layout.addWidget(self.data_display)
+        # 创建滚动区域
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setObjectName("chatScrollArea")
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        
+        # 创建消息容器
+        self.messages_widget = QWidget()
+        self.messages_widget.setObjectName("messagesWidget")
+        self.messages_layout = QVBoxLayout(self.messages_widget)
+        self.messages_layout.setContentsMargins(10, 10, 10, 10)
+        self.messages_layout.setSpacing(8)
+        self.messages_layout.addStretch()
+        
+        self.scroll_area.setWidget(self.messages_widget)
+        display_container_layout.addWidget(self.scroll_area)
         
         layout.addWidget(display_container)
         
@@ -316,7 +411,7 @@ class MacOSSerialUI(QWidget):
         # 发送按钮
         self.send_btn = QPushButton("发送")
         self.send_btn.setObjectName("primaryButton")
-        self.send_btn.setMinimumHeight(28)  # 减少高度
+        self.send_btn.setMinimumHeight(28)
         self.send_btn.clicked.connect(self.send_data)
         send_controls_layout.addWidget(self.send_btn)
         
@@ -513,7 +608,10 @@ class MacOSSerialUI(QWidget):
     
     def send_quick_command(self, index):
         """发送快捷命令"""
-        if not self.serial_manager.is_connected:
+        # 获取当前管理器
+        manager = self.serial_manager if self.current_mode == 'serial' else self.bluetooth_manager
+        
+        if not manager.is_connected:
             self.on_error("设备未连接")
             return
         
@@ -527,19 +625,32 @@ class MacOSSerialUI(QWidget):
         
         # 使用发送控制面板选择的格式
         format_type = self.send_format_combo.currentText()
-        success = False
         
-        if format_type == "HEX":
-            success = self.serial_manager.send_hex_string(command)
-        elif format_type == "ASCII":
-            success = self.serial_manager.send_text(command, 'ascii')
-        else:  # UTF-8
-            success = self.serial_manager.send_text(command, 'utf-8')
+        # 先在UI显示发送的数据
+        self.display_sent_data(command, format_type)
         
-        if success:
-            self.sent_count += 1
-            self.sent_bytes += len(command.encode('utf-8'))
-            self.update_stats()
+        # 在后台线程中发送，避免阻塞 UI
+        import threading
+        def send_thread():
+            success = False
+            
+            if format_type == "HEX":
+                success = manager.send_hex_string(command)
+            elif format_type == "ASCII":
+                success = manager.send_text(command, 'ascii')
+            else:  # UTF-8
+                success = manager.send_text(command, 'utf-8')
+            
+            if success:
+                # 更新统计
+                self.sent_count += 1
+                self.sent_bytes += len(command.encode('utf-8'))
+        
+        thread = threading.Thread(target=send_thread, daemon=True)
+        thread.start()
+        
+        # 立即更新统计
+        self.update_stats()
     
     def add_new_command(self):
         """添加新命令"""
@@ -755,6 +866,31 @@ class MacOSSerialUI(QWidget):
                 border: 1px solid {border_color};
                 border-radius: 12px;
                 padding: 3px;
+            }}
+            
+            #chatScrollArea {{
+                background-color: {display_bg};
+                border: none;
+            }}
+            
+            #messagesWidget {{
+                background-color: {display_bg};
+            }}
+            
+            #chatScrollArea QScrollBar:vertical {{
+                background-color: {sidebar_bg};
+                width: 8px;
+                border-radius: 4px;
+            }}
+            
+            #chatScrollArea QScrollBar::handle:vertical {{
+                background-color: {border_color};
+                border-radius: 4px;
+                min-height: 20px;
+            }}
+            
+            #chatScrollArea QScrollBar::handle:vertical:hover {{
+                background-color: #86868b;
             }}
             
             #dataDisplay {{
@@ -1008,14 +1144,172 @@ class MacOSSerialUI(QWidget):
                 font-weight: 500;
                 margin: 2px 0px;
             }}
+            
+            /* 信息标签样式 */
+            #infoLabel {{
+                color: #86868b;
+                font-size: 9px;
+                font-weight: normal;
+                margin: 2px 0px;
+            }}
+            
+            /* 刷新按钮样式 */
+            #refreshButton {{
+                background-color: {button_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                font-size: 16px;
+                font-weight: bold;
+            }}
+            
+            #refreshButton:hover {{
+                background-color: {"#404040" if self.is_dark_mode else "#e8e8ed"};
+            }}
+            
+            #refreshButton:pressed {{
+                background-color: {"#505050" if self.is_dark_mode else "#d8d8dd"};
+            }}
+            
+            /* SpinBox 样式 */
+            QSpinBox {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                padding: 6px 10px;
+                min-height: 20px;
+            }}
+            
+            QSpinBox:hover {{
+                border-color: #0071e3;
+            }}
+            
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background-color: {button_bg};
+                border: none;
+                width: 16px;
+                border-radius: 3px;
+            }}
+            
+            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+                background-color: {border_color};
+            }}
+            
+            QSpinBox::up-arrow {{
+                image: url(src/resource/triangle.png);
+                width: 8px;
+                height: 8px;
+            }}
+            
+            QSpinBox::down-arrow {{
+                image: url(src/resource/triangle.png);
+                width: 8px;
+                height: 8px;
+            }}
         """)
+    
+    def on_mode_changed(self, mode_text: str):
+        """模式切换"""
+        # 如果已连接，先断开
+        if self.is_any_connected():
+            self.toggle_connection()
+        
+        if mode_text == "串口":
+            self.current_mode = 'serial'
+            self.serial_config_widget.show()
+            self.bluetooth_config_widget.hide()
+            self.refresh_btn.setToolTip("刷新串口列表")
+        else:  # 蓝牙
+            self.current_mode = 'bluetooth'
+            self.serial_config_widget.hide()
+            self.bluetooth_config_widget.show()
+            self.refresh_btn.setToolTip("扫描蓝牙设备")
+            
+            # 检查蓝牙是否可用
+            if not BluetoothManager.is_available():
+                self.show_macos_alert(
+                    "蓝牙不可用",
+                    "蓝牙功能需要安装蓝牙库\n\n请运行: pip install bleak"
+                )
+            else:
+                # 根据蓝牙后端显示不同的提示
+                backend = BluetoothManager.get_backend()
+                if backend == 'bleak':
+                    self.bt_info_label.setText("BLE 模式\n自动检测设备特征")
+                    self.pybluez_config_widget.hide()
+                elif backend == 'pybluez':
+                    self.bt_info_label.setText("经典蓝牙模式\n需要先配对设备")
+                    self.pybluez_config_widget.show()
+        
+        self.refresh_devices()
+    
+    def is_any_connected(self) -> bool:
+        """检查是否有任何连接"""
+        if self.current_mode == 'serial':
+            return self.serial_manager.is_connected
+        else:
+            return self.bluetooth_manager.is_connected
+    
+    def refresh_devices(self):
+        """刷新设备列表"""
+        if self.current_mode == 'serial':
+            self.refresh_ports()
+        else:
+            self.scan_bluetooth_devices()
+    
+    def scan_bluetooth_devices(self):
+        """扫描蓝牙设备"""
+        if not BluetoothManager.is_available():
+            return
+        
+        # 禁用刷新按钮，显示扫描中
+        self.refresh_btn.setEnabled(False)
+        self.refresh_btn.setText("...")
+        self.port_combo.clear()
+        self.port_combo.addItem("正在扫描...")
+        
+        # 在后台线程中扫描
+        def scan_thread():
+            devices = self.bluetooth_manager.scan_devices(duration=8)
+            # 使用信号更新UI
+            self.bluetooth_manager.scan_completed.emit(devices)
+        
+        import threading
+        thread = threading.Thread(target=scan_thread, daemon=True)
+        thread.start()
+    
+    def on_bluetooth_scan_completed(self, devices: List[BluetoothDevice]):
+        """蓝牙扫描完成"""
+        self.refresh_btn.setEnabled(True)
+        self.refresh_btn.setText("⟳")
+        self.port_combo.clear()
+        
+        if not devices:
+            self.port_combo.addItem("未发现设备")
+        else:
+            for device in devices:
+                self.port_combo.addItem(device.display_name, device.address)
     
     def connect_signals(self):
         """连接信号"""
+        # 串口信号
         self.serial_manager.data_received.connect(self.on_data_received)
         self.serial_manager.device_connected.connect(self.on_device_connected)
         self.serial_manager.device_disconnected.connect(self.on_device_disconnected)
         self.serial_manager.error_occurred.connect(self.on_error)
+        self.serial_manager.connecting_status.connect(self.on_connecting_status)
+        
+        # 蓝牙信号
+        self.bluetooth_manager.data_received.connect(self.on_data_received)
+        self.bluetooth_manager.device_connected.connect(self.on_device_connected)
+        self.bluetooth_manager.device_disconnected.connect(self.on_device_disconnected)
+        self.bluetooth_manager.error_occurred.connect(self.on_error)
+        self.bluetooth_manager.scan_completed.connect(self.on_bluetooth_scan_completed)
+        self.bluetooth_manager.connecting_status.connect(self.on_connecting_status)
+        
+        # 内部信号
+        self.display_sent_signal.connect(self.display_sent_data)
     
     def refresh_ports(self):
         """刷新串口列表"""
@@ -1026,27 +1320,58 @@ class MacOSSerialUI(QWidget):
     
     def toggle_connection(self):
         """切换连接状态"""
-        if self.serial_manager.is_connected:
-            self.serial_manager.disconnect()
+        if self.current_mode == 'serial':
+            # 串口模式
+            if self.serial_manager.is_connected:
+                self.serial_manager.disconnect()
+            else:
+                port = self.port_combo.currentData()
+                if not port:
+                    self.on_error("请选择串口")
+                    return
+                
+                # 配置串口参数
+                config = {
+                    'baud_rate': int(self.baud_combo.currentText()),
+                    'data_bits': int(self.data_bits_combo.currentText()),
+                    'stop_bits': float(self.stop_bits_combo.currentText()),
+                    'parity': self.parity_combo.currentText()
+                }
+                self.serial_manager.configure(config)
+                
+                # 在后台线程中连接，避免阻塞 UI
+                import threading
+                def connect_thread():
+                    self.serial_manager.connect(port)
+                
+                thread = threading.Thread(target=connect_thread, daemon=True)
+                thread.start()
         else:
-            port = self.port_combo.currentData()
-            if not port:
-                self.on_error("请选择串口")
-                return
-            
-            # 配置串口参数
-            config = {
-                'baud_rate': int(self.baud_combo.currentText()),
-                'data_bits': int(self.data_bits_combo.currentText()),
-                'stop_bits': float(self.stop_bits_combo.currentText()),
-                'parity': self.parity_combo.currentText()
-            }
-            self.serial_manager.configure(config)
-            self.serial_manager.connect(port)
+            # 蓝牙模式
+            if self.bluetooth_manager.is_connected:
+                self.bluetooth_manager.disconnect()
+            else:
+                address = self.port_combo.currentData()
+                if not address:
+                    self.on_error("请选择蓝牙设备")
+                    return
+                
+                port = self.rfcomm_port_spin.value()
+                
+                # 在后台线程中连接，避免阻塞 UI
+                import threading
+                def connect_thread():
+                    self.bluetooth_manager.connect(address, port)
+                
+                thread = threading.Thread(target=connect_thread, daemon=True)
+                thread.start()
     
     def send_data(self):
         """发送数据"""
-        if not self.serial_manager.is_connected:
+        # 获取当前管理器
+        manager = self.serial_manager if self.current_mode == 'serial' else self.bluetooth_manager
+        
+        if not manager.is_connected:
             self.on_error("设备未连接")
             return
         
@@ -1054,31 +1379,218 @@ class MacOSSerialUI(QWidget):
         if not text:
             return
         
+        # 保存原始文本用于显示
+        display_text = text
+        format_type = self.send_format_combo.currentText()
+        
+        # HEX 模式下检查是否包含非十六进制字符
+        if format_type == "HEX":
+            hex_chars = ''.join(c for c in text if c in '0123456789ABCDEFabcdef ')
+            if len(hex_chars.replace(' ', '')) != len(text.replace(' ', '')):
+                # 包含非十六进制字符，给出警告
+                from PyQt6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self,
+                    '格式提示',
+                    f'当前是 HEX 模式，但输入包含非十六进制字符。\n\n'
+                    f'要发送文本命令 "{text}"，请切换到 UTF-8 或 ASCII 模式。\n\n'
+                    f'是否切换到 UTF-8 模式并发送？',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.Yes:
+                    self.send_format_combo.setCurrentText("UTF-8")
+                    format_type = "UTF-8"
+                else:
+                    return
+        
+        # 先在UI显示发送的数据
+        self.display_sent_data(display_text, format_type)
+        
+        # 清空输入框
+        self.send_input.clear()
+        
         # 添加换行符
         if self.add_newline.isChecked():
             text += '\n'
         if self.add_carriage.isChecked():
             text += '\r'
         
-        # 根据格式发送
-        format_type = self.send_format_combo.currentText()
-        success = False
+        # 在后台线程中发送，避免阻塞 UI
+        import threading
+        def send_thread():
+            success = False
+            
+            if format_type == "HEX":
+                success = manager.send_hex_string(text)
+            elif format_type == "ASCII":
+                success = manager.send_text(text, 'ascii')
+            else:  # UTF-8
+                success = manager.send_text(text, 'utf-8')
+            
+            if success:
+                # 更新统计
+                self.sent_count += 1
+                self.sent_bytes += len(text.encode('utf-8'))
+                print(f"✓ 数据已发送: {text[:50]}...")  # 打印确认信息
+            else:
+                print(f"✗ 数据发送失败")
         
+        thread = threading.Thread(target=send_thread, daemon=True)
+        thread.start()
+        
+        # 立即更新统计
+        self.update_stats()
+    
+    def display_sent_data(self, text: str, format_type: str):
+        """在数据显示区显示发送的数据 - QQ聊天样式（右对齐，蓝色气泡）"""
+        print(f"display_sent_data 被调用: {text}, 格式: {format_type}")
+        
+        # 格式化显示
         if format_type == "HEX":
-            success = self.serial_manager.send_hex_string(text)
-        elif format_type == "ASCII":
-            success = self.serial_manager.send_text(text, 'ascii')
-        else:  # UTF-8
-            success = self.serial_manager.send_text(text, 'utf-8')
+            try:
+                hex_string = ''.join(c for c in text if c in '0123456789ABCDEFabcdef')
+                if len(hex_string) % 2 != 0:
+                    hex_string = '0' + hex_string
+                data = bytes.fromhex(hex_string)
+                display = ' '.join(f'{b:02X}' for b in data)
+            except:
+                display = text
+        else:
+            display = text
         
-        if success:
-            self.sent_count += 1
-            self.sent_bytes += len(text.encode('utf-8'))
-            self.update_stats()
+        try:
+            # 获取时间戳
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            
+            # 创建气泡消息
+            self.add_message_bubble(display, timestamp, is_sent=True)
+            
+            print("发送数据已显示到界面")
+        except Exception as e:
+            print(f"显示数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def toggle_timestamps(self):
+        """切换时间戳显示"""
+        show_timestamps = self.timestamp_check.isChecked()
+        
+        # 遍历所有消息容器，更新时间戳显示
+        for i in range(self.messages_layout.count()):
+            item = self.messages_layout.itemAt(i)
+            if item and item.widget():
+                message_container = item.widget()
+                # 查找时间戳标签
+                for child in message_container.findChildren(QLabel):
+                    if child.objectName() == "timestampLabel":
+                        child.setVisible(show_timestamps)
+    
+    def add_message_bubble(self, text: str, timestamp: str, is_sent: bool = True):
+        """添加消息气泡"""
+        # 创建消息容器（包含时间戳和气泡）
+        message_container = QWidget()
+        container_layout = QVBoxLayout(message_container)
+        container_layout.setContentsMargins(0, 4, 0, 4)
+        container_layout.setSpacing(2)
+        
+        # 时间戳（在气泡上方）
+        time_label = QLabel(timestamp)
+        time_label.setObjectName("timestampLabel")
+        time_label.setAlignment(Qt.AlignmentFlag.AlignRight if is_sent else Qt.AlignmentFlag.AlignLeft)
+        
+        if self.timestamp_check.isChecked():
+            # 显示时间戳
+            time_label.setStyleSheet("""
+                color: #86868b;
+                font-size: 11px;
+                background: transparent;
+                padding: 2px 8px;
+            """)
+            time_label.setVisible(True)
+        else:
+            # 隐藏时间戳
+            time_label.setVisible(False)
+        
+        container_layout.addWidget(time_label)
+        
+        # 气泡容器（用于左右对齐）
+        bubble_container = QWidget()
+        bubble_layout = QHBoxLayout(bubble_container)
+        bubble_layout.setContentsMargins(0, 0, 0, 0)
+        bubble_layout.setSpacing(0)
+        
+        # 创建气泡
+        bubble = QFrame()
+        bubble.setObjectName("sentBubble" if is_sent else "receivedBubble")
+        bubble_content_layout = QVBoxLayout(bubble)
+        bubble_content_layout.setContentsMargins(14, 10, 14, 10)
+        bubble_content_layout.setSpacing(0)
+        
+        # 消息内容
+        content_label = QLabel(text)
+        content_label.setObjectName("bubbleContent")
+        content_label.setWordWrap(True)
+        content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        bubble_content_layout.addWidget(content_label)
+        
+        # 设置气泡样式和对齐
+        if is_sent:
+            # 发送消息：右对齐，蓝色
+            bubble_layout.addStretch()
+            bubble_layout.addWidget(bubble)
+            bubble.setStyleSheet("""
+                #sentBubble {
+                    background-color: #0071e3;
+                    border-radius: 18px;
+                    max-width: 400px;
+                }
+                #bubbleContent {
+                    color: #ffffff;
+                    font-size: 14px;
+                    background: transparent;
+                }
+            """)
+        else:
+            # 接收消息：左对齐，灰色
+            bubble_layout.addWidget(bubble)
+            bubble_layout.addStretch()
+            bubble_color = "#e5e5ea" if not self.is_dark_mode else "#3a3a3c"
+            text_color = "#000000" if not self.is_dark_mode else "#ffffff"
+            bubble.setStyleSheet(f"""
+                #receivedBubble {{
+                    background-color: {bubble_color};
+                    border-radius: 18px;
+                    max-width: 400px;
+                }}
+                #bubbleContent {{
+                    color: {text_color};
+                    font-size: 14px;
+                    background: transparent;
+                }}
+            """)
+        
+        container_layout.addWidget(bubble_container)
+        
+        # 插入到消息列表（在stretch之前）
+        count = self.messages_layout.count()
+        self.messages_layout.insertWidget(count - 1, message_container)
+        
+        # 自动滚动到底部
+        if self.autoscroll_check.isChecked():
+            QTimer.singleShot(50, lambda: self.scroll_area.verticalScrollBar().setValue(
+                self.scroll_area.verticalScrollBar().maximum()
+            ))
+    
     
     def clear_display(self):
         """清除显示"""
-        self.data_display.clear()
+        # 清除所有消息气泡
+        while self.messages_layout.count() > 1:  # 保留最后的stretch
+            item = self.messages_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        
         self.sent_count = 0
         self.sent_bytes = 0
         self.received_count = 0
@@ -1086,7 +1598,9 @@ class MacOSSerialUI(QWidget):
         self.update_stats()
     
     def on_data_received(self, data: bytes):
-        """接收到数据"""
+        """接收到数据 - QQ聊天样式（左对齐，灰色气泡）"""
+        print(f"on_data_received 被调用: {len(data)} 字节")
+        
         self.received_count += 1
         self.received_bytes += len(data)
         self.update_stats()
@@ -1101,51 +1615,102 @@ class MacOSSerialUI(QWidget):
         else:  # UTF-8
             text = data.decode('utf-8', errors='replace')
         
-        # 添加时间戳
-        if self.timestamp_check.isChecked():
+        print(f"准备显示接收数据: {text}")
+        
+        try:
+            # 获取时间戳
             from datetime import datetime
-            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-            text = f"[{timestamp}] {text}"
-        
-        # 显示数据
-        self.data_display.append(text)
-        
-        # 自动滚动
-        if self.autoscroll_check.isChecked():
-            scrollbar = self.data_display.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            
+            # 创建气泡消息
+            self.add_message_bubble(text, timestamp, is_sent=False)
+            
+            print("接收数据已显示到界面")
+        except Exception as e:
+            print(f"显示接收数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def on_connecting_status(self, status: str):
+        """连接状态更新"""
+        if status:
+            # 开始连接动画
+            self.connecting_dots = 0
+            self.status_label.setText(status)
+            self.status_indicator.setStyleSheet("color: #ff9500;")  # 橙色
+            self.connecting_timer.start(500)  # 每500ms更新一次
+            
+            # 禁用连接按钮
+            self.connect_btn.setEnabled(False)
+        else:
+            # 停止连接动画
+            self.connecting_timer.stop()
+            self.connect_btn.setEnabled(True)
+    
+    def update_connecting_animation(self):
+        """更新连接动画"""
+        self.connecting_dots = (self.connecting_dots + 1) % 4
+        dots = "." * self.connecting_dots
+        self.status_label.setText(f"正在连接{dots}")
     
     def on_device_connected(self):
         """设备已连接"""
+        self.connecting_timer.stop()  # 停止连接动画
         self.connect_btn.setText("断开")
+        self.connect_btn.setEnabled(True)
         self.status_indicator.setStyleSheet("color: #34c759;")  # 绿色
-        self.status_label.setText("已连接")
         
-        # 禁用配置控件
-        self.port_combo.setEnabled(False)
-        self.baud_combo.setEnabled(False)
-        self.data_bits_combo.setEnabled(False)
-        self.stop_bits_combo.setEnabled(False)
-        self.parity_combo.setEnabled(False)
+        if self.current_mode == 'serial':
+            self.status_label.setText("串口已连接")
+            # 禁用串口配置控件
+            self.port_combo.setEnabled(False)
+            self.baud_combo.setEnabled(False)
+            self.data_bits_combo.setEnabled(False)
+            self.stop_bits_combo.setEnabled(False)
+            self.parity_combo.setEnabled(False)
+        else:
+            self.status_label.setText("蓝牙已连接")
+            # 禁用蓝牙配置控件
+            self.port_combo.setEnabled(False)
+            self.rfcomm_port_spin.setEnabled(False)
+        
+        # 禁用模式切换
+        self.mode_combo.setEnabled(False)
+        self.refresh_btn.setEnabled(False)
         
         # 启用发送控件
         self.send_btn.setEnabled(True)
+        
+        print("设备已连接，发送按钮已启用")
     
     def on_device_disconnected(self):
         """设备已断开"""
+        self.connecting_timer.stop()  # 停止连接动画
         self.connect_btn.setText("连接")
+        self.connect_btn.setEnabled(True)
         self.status_indicator.setStyleSheet("color: #86868b;")  # 灰色
         self.status_label.setText("未连接")
         
-        # 启用配置控件
-        self.port_combo.setEnabled(True)
-        self.baud_combo.setEnabled(True)
-        self.data_bits_combo.setEnabled(True)
-        self.stop_bits_combo.setEnabled(True)
-        self.parity_combo.setEnabled(True)
+        if self.current_mode == 'serial':
+            # 启用串口配置控件
+            self.port_combo.setEnabled(True)
+            self.baud_combo.setEnabled(True)
+            self.data_bits_combo.setEnabled(True)
+            self.stop_bits_combo.setEnabled(True)
+            self.parity_combo.setEnabled(True)
+        else:
+            # 启用蓝牙配置控件
+            self.port_combo.setEnabled(True)
+            self.rfcomm_port_spin.setEnabled(True)
+        
+        # 启用模式切换
+        self.mode_combo.setEnabled(True)
+        self.refresh_btn.setEnabled(True)
         
         # 禁用发送控件
         self.send_btn.setEnabled(False)
+        
+        print("设备已断开，发送按钮已禁用")
     
     def on_error(self, error_msg: str):
         """错误处理"""

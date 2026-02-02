@@ -43,6 +43,7 @@ class SerialManager(QObject):
     device_disconnected = pyqtSignal()
     data_received = pyqtSignal(bytes)
     error_occurred = pyqtSignal(str)
+    connecting_status = pyqtSignal(str)  # 连接状态信号
     
     def __init__(self):
         super().__init__()
@@ -104,12 +105,15 @@ class SerialManager(QObject):
             self.disconnect()
         
         try:
+            self.connecting_status.emit("正在连接...")
             self._serial = serial.Serial(port, **self._config)
             self._is_connected = True
             self._start_reading()
+            self.connecting_status.emit("")
             self.device_connected.emit()
             return True
         except serial.SerialException as e:
+            self.connecting_status.emit("")
             self.error_occurred.emit(f"连接串口失败: {str(e)}")
             return False
     
@@ -178,8 +182,11 @@ class SerialManager(QObject):
             return False
         
         try:
+            print(f"[串口发送] 准备发送 {len(data)} 字节")
+            print(f"[串口发送] 数据: {data}")
             bytes_written = self._serial.write(data)
             self._serial.flush()
+            print(f"[串口发送] 实际写入 {bytes_written} 字节")
             return bytes_written == len(data)
         except serial.SerialException as e:
             self.error_occurred.emit(f"发送数据失败: {str(e)}")
@@ -203,6 +210,10 @@ class SerialManager(QObject):
         """发送文本数据"""
         try:
             data = text.encode(encoding)
+            print(f"[发送文本] 原始: {text}")
+            print(f"[发送文本] 编码: {encoding}")
+            print(f"[发送文本] 字节: {data}")
+            print(f"[发送文本] HEX: {data.hex()}")
             return self.send_data(data)
         except UnicodeEncodeError as e:
             self.error_occurred.emit(f"文本编码失败: {str(e)}")

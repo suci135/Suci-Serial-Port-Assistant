@@ -4,20 +4,15 @@ __pycache__/
 *$py.class
 *.so
 .Python
+*.pyc
+*.pyo
+*.pyd
+
+# Build
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
+.eggs/
 *.egg
 
 # Virtual Environment
@@ -36,25 +31,17 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+*.lnk
 
-# Project specific
+# Logs
 *.log
 
 # PyInstaller
-build/
-dist/
 *.spec.bak
 *.manifest
-*.exe
-*.app
 
-# Build and guide files (uncommented build.spec and build.bat as they should be tracked)
-#BUILD_GUIDE.md
-#UPLOAD_GUIDE.md
-
-# Additional Python files
-*.pyo
-*.pyd
+# Testing
 .coverage
 .pytest_cache/
 .tox/
@@ -77,11 +64,13 @@ coverage.xml
 *.temp
 *.bak
 
-# Windows specific
-*.lnk
-desktop.ini
+# Project specific - user data
+quick_commands.json.bak
+*.db
+*.sqlite
 
-# Images and screenshots (allow tracking)
-# *.png - commented out to allow screenshots and images to be tracked
-# *.jpg - commented out to allow screenshots and images to be tracked
-# *.jpeg - commented out to allow screenshots and images to be tracked
+# Documentation (keep only README.md)
+CHANGELOG.md
+BLUETOOTH_GUIDE.md
+QUICK_START.md
+test_*.py
