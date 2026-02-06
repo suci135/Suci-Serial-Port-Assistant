@@ -25,24 +25,14 @@
 - Python 3.8+
 - Windows / macOS / Linux
 
-### 安装
-
-**方法一：使用安装脚本（推荐）**
-
-Windows:
-```bash
-install.bat
-```
-
-Linux/macOS:
-```bash
-chmod +x install.sh
-./install.sh
-```
-
-**方法二：手动安装**
+### 安装依赖
 
 1. 安装基础依赖：
+```bash
+pip install -r requirements.txt
+```
+
+或手动安装：
 ```bash
 pip install PyQt6==6.6.1 pyserial==3.5 qasync==0.27.1
 ```
@@ -69,6 +59,14 @@ pip install bleak
 ```bash
 python main.py
 ```
+
+### 打包成exe（Windows）
+
+```bash
+build.bat
+```
+
+打包后的程序位于 `dist\Suci串口助手\` 文件夹中。
 
 ## 📖 使用说明
 
@@ -127,7 +125,8 @@ python main.py
 .
 ├── main.py                          # 主程序入口
 ├── requirements.txt                 # 依赖列表
-├── install.bat / install.sh         # 安装脚本
+├── build.bat                        # Windows打包脚本
+├── build.spec                       # PyInstaller配置
 ├── quick_commands.json              # 快捷命令配置
 ├── src/
 │   ├── core/                        # 核心功能模块

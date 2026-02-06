@@ -69,8 +69,5 @@ quick_commands.json.bak
 *.db
 *.sqlite
 
-# Documentation (keep only README.md)
-CHANGELOG.md
-BLUETOOTH_GUIDE.md
-QUICK_START.md
-test_*.py
+# Upload scripts
+github_upload.bat
