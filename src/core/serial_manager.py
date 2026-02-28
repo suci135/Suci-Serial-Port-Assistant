@@ -69,7 +69,7 @@ class SerialManager(QObject):
         return [SerialDevice(port) for port in ports]
     
     def configure(self, config: Dict[str, Any]):
-        """配置串口参数"""
+        """配置串口参数（支持动态修改）"""
         # 映射配置参数
         if 'baud_rate' in config:
             self._config['baudrate'] = config['baud_rate']
@@ -98,6 +98,26 @@ class SerialManager(QObject):
         
         if 'read_timeout' in config:
             self._config['timeout'] = config['read_timeout']
+        
+        # 如果已连接，动态应用配置
+        if self._is_connected and self._serial and self._serial.is_open:
+            try:
+                if 'baud_rate' in config:
+                    self._serial.baudrate = self._config['baudrate']
+                if 'data_bits' in config:
+                    self._serial.bytesize = self._config['bytesize']
+                if 'parity' in config:
+                    self._serial.parity = self._config['parity']
+                if 'stop_bits' in config:
+                    self._serial.stopbits = self._config['stopbits']
+                if 'flow_control' in config:
+                    self._serial.xonxoff = self._config['xonxoff']
+                    self._serial.rtscts = self._config['rtscts']
+                    self._serial.dsrdtr = self._config['dsrdtr']
+                if 'read_timeout' in config:
+                    self._serial.timeout = self._config['timeout']
+            except Exception as e:
+                self.error_occurred.emit(f"动态修改配置失败: {str(e)}")
     
     def connect(self, port: str) -> bool:
         """连接到指定串口"""
@@ -182,11 +202,8 @@ class SerialManager(QObject):
             return False
         
         try:
-            print(f"[串口发送] 准备发送 {len(data)} 字节")
-            print(f"[串口发送] 数据: {data}")
             bytes_written = self._serial.write(data)
             self._serial.flush()
-            print(f"[串口发送] 实际写入 {bytes_written} 字节")
             return bytes_written == len(data)
         except serial.SerialException as e:
             self.error_occurred.emit(f"发送数据失败: {str(e)}")
@@ -210,10 +227,6 @@ class SerialManager(QObject):
         """发送文本数据"""
         try:
             data = text.encode(encoding)
-            print(f"[发送文本] 原始: {text}")
-            print(f"[发送文本] 编码: {encoding}")
-            print(f"[发送文本] 字节: {data}")
-            print(f"[发送文本] HEX: {data.hex()}")
             return self.send_data(data)
         except UnicodeEncodeError as e:
             self.error_occurred.emit(f"文本编码失败: {str(e)}")

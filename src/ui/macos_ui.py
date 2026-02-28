@@ -282,7 +282,7 @@ class MacOSSerialUI(QWidget):
         toolbar.addWidget(QLabel("格式:"))
         self.format_combo = QComboBox()
         self.format_combo.addItems(["HEX", "ASCII", "UTF-8"])
-        self.format_combo.setCurrentText("HEX")
+        self.format_combo.setCurrentText("UTF-8")
         self.format_combo.setMinimumWidth(120)
         self.format_combo.setMaximumWidth(150)
         toolbar.addWidget(self.format_combo)
@@ -376,7 +376,7 @@ class MacOSSerialUI(QWidget):
         format_layout.addWidget(QLabel("格式:"))
         self.send_format_combo = QComboBox()
         self.send_format_combo.addItems(["HEX", "ASCII", "UTF-8"])
-        self.send_format_combo.setCurrentText("HEX")
+        self.send_format_combo.setCurrentText("UTF-8")
         format_layout.addWidget(self.send_format_combo)
         format_layout.addStretch()
         layout.addLayout(format_layout)
@@ -1310,6 +1310,12 @@ class MacOSSerialUI(QWidget):
         
         # 内部信号
         self.display_sent_signal.connect(self.display_sent_data)
+        
+        # 串口配置变更信号 - 支持动态修改
+        self.baud_combo.currentTextChanged.connect(self.on_serial_config_changed)
+        self.data_bits_combo.currentTextChanged.connect(self.on_serial_config_changed)
+        self.stop_bits_combo.currentTextChanged.connect(self.on_serial_config_changed)
+        self.parity_combo.currentTextChanged.connect(self.on_serial_config_changed)
     
     def refresh_ports(self):
         """刷新串口列表"""
@@ -1317,6 +1323,23 @@ class MacOSSerialUI(QWidget):
         devices = SerialManager.list_devices()
         for device in devices:
             self.port_combo.addItem(device.display_name, device.port)
+    
+    def on_serial_config_changed(self):
+        """串口配置变更 - 实时应用到已连接的串口"""
+        if self.current_mode == 'serial' and self.serial_manager.is_connected:
+            try:
+                # 获取当前配置
+                config = {
+                    'baud_rate': int(self.baud_combo.currentText()),
+                    'data_bits': int(self.data_bits_combo.currentText()),
+                    'stop_bits': float(self.stop_bits_combo.currentText()),
+                    'parity': self.parity_combo.currentText()
+                }
+                # 应用配置
+                self.serial_manager.configure(config)
+            except ValueError:
+                # 忽略无效的输入值
+                pass
     
     def toggle_connection(self):
         """切换连接状态"""
@@ -1383,26 +1406,6 @@ class MacOSSerialUI(QWidget):
         display_text = text
         format_type = self.send_format_combo.currentText()
         
-        # HEX 模式下检查是否包含非十六进制字符
-        if format_type == "HEX":
-            hex_chars = ''.join(c for c in text if c in '0123456789ABCDEFabcdef ')
-            if len(hex_chars.replace(' ', '')) != len(text.replace(' ', '')):
-                # 包含非十六进制字符，给出警告
-                from PyQt6.QtWidgets import QMessageBox
-                reply = QMessageBox.question(
-                    self,
-                    '格式提示',
-                    f'当前是 HEX 模式，但输入包含非十六进制字符。\n\n'
-                    f'要发送文本命令 "{text}"，请切换到 UTF-8 或 ASCII 模式。\n\n'
-                    f'是否切换到 UTF-8 模式并发送？',
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-                )
-                if reply == QMessageBox.StandardButton.Yes:
-                    self.send_format_combo.setCurrentText("UTF-8")
-                    format_type = "UTF-8"
-                else:
-                    return
-        
         # 先在UI显示发送的数据
         self.display_sent_data(display_text, format_type)
         
@@ -1431,9 +1434,6 @@ class MacOSSerialUI(QWidget):
                 # 更新统计
                 self.sent_count += 1
                 self.sent_bytes += len(text.encode('utf-8'))
-                print(f"✓ 数据已发送: {text[:50]}...")  # 打印确认信息
-            else:
-                print(f"✗ 数据发送失败")
         
         thread = threading.Thread(target=send_thread, daemon=True)
         thread.start()
@@ -1443,8 +1443,6 @@ class MacOSSerialUI(QWidget):
     
     def display_sent_data(self, text: str, format_type: str):
         """在数据显示区显示发送的数据 - QQ聊天样式（右对齐，蓝色气泡）"""
-        print(f"display_sent_data 被调用: {text}, 格式: {format_type}")
-        
         # 格式化显示
         if format_type == "HEX":
             try:
@@ -1465,10 +1463,7 @@ class MacOSSerialUI(QWidget):
             
             # 创建气泡消息
             self.add_message_bubble(display, timestamp, is_sent=True)
-            
-            print("发送数据已显示到界面")
         except Exception as e:
-            print(f"显示数据时出错: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1544,6 +1539,7 @@ class MacOSSerialUI(QWidget):
                     background-color: #0071e3;
                     border-radius: 18px;
                     max-width: 400px;
+                    min-width: 60px;
                 }
                 #bubbleContent {
                     color: #ffffff;
@@ -1562,6 +1558,7 @@ class MacOSSerialUI(QWidget):
                     background-color: {bubble_color};
                     border-radius: 18px;
                     max-width: 400px;
+                    min-width: 60px;
                 }}
                 #bubbleContent {{
                     color: {text_color};
@@ -1599,8 +1596,6 @@ class MacOSSerialUI(QWidget):
     
     def on_data_received(self, data: bytes):
         """接收到数据 - QQ聊天样式（左对齐，灰色气泡）"""
-        print(f"on_data_received 被调用: {len(data)} 字节")
-        
         self.received_count += 1
         self.received_bytes += len(data)
         self.update_stats()
@@ -1615,8 +1610,6 @@ class MacOSSerialUI(QWidget):
         else:  # UTF-8
             text = data.decode('utf-8', errors='replace')
         
-        print(f"准备显示接收数据: {text}")
-        
         try:
             # 获取时间戳
             from datetime import datetime
@@ -1624,10 +1617,7 @@ class MacOSSerialUI(QWidget):
             
             # 创建气泡消息
             self.add_message_bubble(text, timestamp, is_sent=False)
-            
-            print("接收数据已显示到界面")
         except Exception as e:
-            print(f"显示接收数据时出错: {e}")
             import traceback
             traceback.print_exc()
     
@@ -1662,12 +1652,12 @@ class MacOSSerialUI(QWidget):
         
         if self.current_mode == 'serial':
             self.status_label.setText("串口已连接")
-            # 禁用串口配置控件
-            self.port_combo.setEnabled(False)
-            self.baud_combo.setEnabled(False)
-            self.data_bits_combo.setEnabled(False)
-            self.stop_bits_combo.setEnabled(False)
-            self.parity_combo.setEnabled(False)
+            # 保持串口配置控件启用，允许动态修改
+            self.port_combo.setEnabled(False)  # 只禁用端口选择
+            self.baud_combo.setEnabled(True)
+            self.data_bits_combo.setEnabled(True)
+            self.stop_bits_combo.setEnabled(True)
+            self.parity_combo.setEnabled(True)
         else:
             self.status_label.setText("蓝牙已连接")
             # 禁用蓝牙配置控件
@@ -1680,8 +1670,6 @@ class MacOSSerialUI(QWidget):
         
         # 启用发送控件
         self.send_btn.setEnabled(True)
-        
-        print("设备已连接，发送按钮已启用")
     
     def on_device_disconnected(self):
         """设备已断开"""
@@ -1709,8 +1697,6 @@ class MacOSSerialUI(QWidget):
         
         # 禁用发送控件
         self.send_btn.setEnabled(False)
-        
-        print("设备已断开，发送按钮已禁用")
     
     def on_error(self, error_msg: str):
         """错误处理"""
@@ -1724,7 +1710,6 @@ class MacOSSerialUI(QWidget):
     def toggle_dark_mode(self):
         """切换黑夜模式"""
         self.is_dark_mode = not self.is_dark_mode
-        print(f"黑夜模式: {self.is_dark_mode}")  # 调试信息
         self.apply_macos_style()  # 重新应用样式
         
         # 通知主窗口更新样式
@@ -1850,7 +1835,6 @@ class MacOSSerialUI(QWidget):
                     {"name": "连接WiFi网络", "command": "AT+CWJAP=\"SSID\",\"PASS\"", "description": "连接WiFi网络", "enabled": False, "delay": 1000, "is_hex": False},
                 ]
         except Exception as e:
-            print(f"加载快捷命令配置失败: {e}")
             # 返回默认配置
             return [
                 {"name": "重启模块", "command": "AT+RST", "description": "重启模块", "enabled": True, "delay": 1000, "is_hex": False},
@@ -1866,4 +1850,4 @@ class MacOSSerialUI(QWidget):
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(self.quick_commands, f, ensure_ascii=False, indent=4)
         except Exception as e:
-            print(f"保存快捷命令配置失败: {e}")
+            pass
