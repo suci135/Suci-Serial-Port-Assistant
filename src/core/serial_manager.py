@@ -183,13 +183,19 @@ class SerialManager(QObject):
                 time.sleep(0.001)  # 1ms 延迟
                 
             except serial.SerialException as e:
-                if self._is_connected:  # 只有在连接状态下才报告错误
-                    self.error_occurred.emit(f"读取数据失败: {str(e)}")
-                break
+                if self._is_connected:
+                    err_msg = str(e)
+                    # 设备真正断开才报错弹窗，临时读取异常只打印日志
+                    if self._serial and not self._serial.is_open:
+                        self.error_occurred.emit(f"串口已断开: {err_msg}")
+                        break
+                    else:
+                        print(f"[SerialManager] 读取异常(忽略): {err_msg}")
+                        continue
             except Exception as e:
                 if self._is_connected:
-                    self.error_occurred.emit(f"未知错误: {str(e)}")
-                break
+                    print(f"[SerialManager] 未知异常(忽略): {str(e)}")
+                    continue
         
         # 发送剩余缓冲区数据
         if buffer:

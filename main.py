@@ -9,7 +9,7 @@ BaudDance Serial Assistant - Python Version
 import sys
 import asyncio
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation
 from PyQt6.QtGui import QFont
 import qasync
 
@@ -69,10 +69,9 @@ class MainWindow(QMainWindow):
         self.is_fullscreen = False
         
         # 创建动画对象
-        from PyQt6.QtCore import QPropertyAnimation, QEasingCurve
         self.resize_animation = QPropertyAnimation(self, b"geometry")
-        self.resize_animation.setDuration(300)  # 300ms动画时长
-        self.resize_animation.setEasingCurve(QEasingCurve.Type.OutCubic)  # 平滑缓动曲线
+        self.resize_animation.setDuration(420)
+        self.resize_animation.setEasingCurve(QEasingCurve.Type.InOutQuart)
     
     def apply_window_style(self):
         """应用窗口样式"""
@@ -276,7 +275,18 @@ class MainWindow(QMainWindow):
         """切换全屏状态 - 带平滑动画"""
         from PyQt6.QtCore import QRect
         from PyQt6.QtWidgets import QApplication
-        
+
+        # 停止正在进行的动画
+        from PyQt6.QtCore import QAbstractAnimation
+        if self.resize_animation.state() == QAbstractAnimation.State.Running:
+            self.resize_animation.stop()
+
+        # 断开之前的 finished 信号，避免重复触发
+        try:
+            self.resize_animation.finished.disconnect()
+        except TypeError:
+            pass
+
         if self.is_fullscreen:
             # 恢复到默认大小 - 带动画
             self.resize_animation.setStartValue(self.geometry())
@@ -287,10 +297,10 @@ class MainWindow(QMainWindow):
             # 保存当前大小和位置作为默认值
             if not self.isMaximized() and not self.isFullScreen():
                 self.default_geometry = self.geometry()
-            
+
             # 获取屏幕尺寸
             screen = QApplication.primaryScreen().availableGeometry()
-            
+
             # 进入全屏 - 带动画
             self.resize_animation.setStartValue(self.geometry())
             self.resize_animation.setEndValue(screen)
@@ -314,6 +324,25 @@ class MainWindow(QMainWindow):
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
         self.drag_position = None
+
+    def changeEvent(self, event):
+        """监听窗口状态变化 - 支持任务栏点击最小化/复原"""
+        from PyQt6.QtCore import QEvent
+        if event.type() == QEvent.Type.WindowStateChange:
+            if not (self.windowState() & Qt.WindowState.WindowMinimized):
+                self.show()
+                self.raise_()
+                self.activateWindow()
+        super().changeEvent(event)
+
+    def toggle_window_visibility(self):
+        """任务栏点击：最小化 / 复原切换"""
+        if self.isMinimized():
+            self.showNormal()
+            self.raise_()
+            self.activateWindow()
+        else:
+            self.showMinimized()
 
 
 def main():
@@ -350,6 +379,17 @@ def main():
     # 创建主窗口
     window = MainWindow(config)
     window.show()
+
+    # 监听应用激活事件：点击任务栏图标时最小化/复原
+    def on_app_state_changed(state):
+        from PyQt6.QtCore import Qt
+        if state == Qt.ApplicationState.ApplicationActive:
+            if window.isMinimized():
+                window.showNormal()
+                window.raise_()
+                window.activateWindow()
+
+    app.applicationStateChanged.connect(on_app_state_changed)
     
     # 运行事件循环
     with qasync.QEventLoop(app) as loop:
