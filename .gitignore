@@ -4,18 +4,22 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pdb
 
 # 虚拟环境
 .venv/
 venv/
+env/
 ENV/
 
 # PyInstaller 构建产物
 build/
 dist/
-installer_output/
 *.spec.bak
 *.manifest
+
+# 安装包输出
+installer_output/
 
 # IDE
 .idea/
@@ -23,17 +27,24 @@ installer_output/
 *.swp
 *~
 
-# OS
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
 Thumbs.db
 desktop.ini
+ehthumbs.db
 
 # 日志
 *.log
+logs/
 
 # 临时文件
 *.tmp
 *.bak
+*.orig
 
-# 用户数据备份
+# 用户数据
 quick_commands.json.bak
