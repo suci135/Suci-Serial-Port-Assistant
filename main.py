@@ -8,6 +8,7 @@ BaudDance Serial Assistant - Python Version
 
 import sys
 import asyncio
+import os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame
 from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation
 from PyQt6.QtGui import QFont
@@ -16,6 +17,15 @@ import qasync
 from src.ui.macos_ui import MacOSSerialUI
 from src.core.app_config import AppConfig
 from src.core.serial_manager import SerialManager
+
+
+def resource_path(relative_path: str) -> str:
+    """获取资源文件的绝对路径，兼容 PyInstaller 打包环境"""
+    if hasattr(sys, '_MEIPASS'):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relative_path)
 
 
 class MainWindow(QMainWindow):
@@ -39,7 +49,7 @@ class MainWindow(QMainWindow):
         
         # 设置窗口图标
         from PyQt6.QtGui import QIcon
-        self.setWindowIcon(QIcon("src/resource/Assistant.png"))
+        self.setWindowIcon(QIcon(resource_path("src/resource/Assistant.png")))
         
         # 创建主容器
         main_container = QWidget()
@@ -354,7 +364,7 @@ def main():
     
     # 设置字体
     from PyQt6.QtGui import QFontDatabase
-    font_id = QFontDatabase.addApplicationFont("src/resource/AlimamaFangYuanTiVF-Thin-2.ttf")
+    font_id = QFontDatabase.addApplicationFont(resource_path("src/resource/AlimamaFangYuanTiVF-Thin-2.ttf"))
     if font_id != -1:
         font_families = QFontDatabase.applicationFontFamilies(font_id)
         if font_families:

@@ -12,13 +12,13 @@ echo [Config] Setting Git user information...
 git config --global user.name "Su Ci"
 git config --global user.email "3314881686@qq.com"
 echo [Done] Git user info configured
-
 echo.
+
 echo [Verify] Current Git config:
 git config --global user.name
 git config --global user.email
-
 echo.
+
 :: Check if in Git repository
 git status >nul 2>&1
 if %errorlevel% neq 0 (
@@ -31,8 +31,8 @@ if %errorlevel% neq 0 (
 :: Show current status
 echo [Info] Checking Git status...
 git status --short
-
 echo.
+
 echo [Info] Adding all changed files...
 git add .
 
@@ -52,7 +52,7 @@ if %errorlevel% equ 0 (
     echo [Info] Files to be committed:
     git diff --cached --name-only
     echo.
-    
+
     :: Get commit message
     set /p commit_msg="Enter commit message (press Enter for default): "
     if "!commit_msg!"=="" (
@@ -60,10 +60,9 @@ if %errorlevel% equ 0 (
         for /f "tokens=1-2 delims=: " %%a in ('time /t') do set current_time=%%a:%%b
         set commit_msg=Auto update - !current_date! !current_time!
     )
-    
+
     echo [Info] Committing changes...
     git commit -m "!commit_msg!"
-    
     if !errorlevel! neq 0 (
         echo [Error] Commit failed!
         pause
@@ -74,7 +73,6 @@ if %errorlevel% equ 0 (
 echo.
 echo [Info] Pushing to remote repository...
 git push
-
 if %errorlevel% equ 0 (
     echo.
     echo ========================================

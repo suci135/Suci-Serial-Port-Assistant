@@ -16,8 +16,16 @@ a = Analysis(
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
         'serial',
+        'serial.tools',
+        'serial.tools.list_ports',
         'qasync',
         'asyncio',
+        'bleak',
+        'bleak.backends',
+        'bleak.backends.winrt',
+        'openpyxl',
+        'openpyxl.styles',
+        'openpyxl.utils',
     ],
     hookspath=[],
     hooksconfig={},
@@ -35,7 +43,7 @@ exe = EXE(
     pyz,
     a.scripts,
     [],
-    exclude_binaries=True,  # 改为文件夹模式
+    exclude_binaries=True,
     name='Suci串口助手',
     debug=False,
     bootloader_ignore_signals=False,
@@ -49,7 +57,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='src/resource/Assistant.png',  # PNG不能作为图标，需要.ico文件
+    icon='src/resource/Assistant.ico',
 )
 
 coll = COLLECT(

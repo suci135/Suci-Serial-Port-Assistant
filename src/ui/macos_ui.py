@@ -5,6 +5,7 @@ macOS 原生风格串口调试工具 UI - 支持串口和蓝牙
 
 import json
 import os
+import sys
 from typing import List
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
@@ -16,9 +17,41 @@ from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
 
 
+def resource_path(relative_path: str) -> str:
+    """获取资源文件的绝对路径，兼容 PyInstaller 打包环境"""
+    if hasattr(sys, '_MEIPASS'):
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+        base = os.path.join(base, '..', '..')
+    return os.path.normpath(os.path.join(base, relative_path))
+
+
+class MessageContainer(QWidget):
+    """带 hover 事件的消息容器"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._copy_btn = None
+        self._copied_label = None
+
+    def set_copy_widgets(self, copy_btn, copied_label):
+        self._copy_btn = copy_btn
+        self._copied_label = copied_label
+
+    def enterEvent(self, event):
+        if self._copy_btn and self._copied_label and not self._copied_label.isVisible():
+            self._copy_btn.setVisible(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._copy_btn:
+            self._copy_btn.setVisible(False)
+        super().leaveEvent(event)
+
+
 class MacOSSerialUI(QWidget):
     """macOS 风格串口调试助手主界面"""
-    
+
     data_sent = pyqtSignal(bytes)
     display_sent_signal = pyqtSignal(str, str)  # 新增信号：用于显示发送的数据
     
@@ -36,7 +69,10 @@ class MacOSSerialUI(QWidget):
         self.sent_bytes = 0
         self.received_count = 0
         self.received_bytes = 0
-        
+
+        # 消息记录（用于导出）
+        self.message_log = []  # [{"time": str, "direction": str, "content": str}]
+
         # 黑夜模式状态
         self.is_dark_mode = False
         
@@ -307,6 +343,12 @@ class MacOSSerialUI(QWidget):
         self.clear_btn.setObjectName("secondaryButton")
         self.clear_btn.clicked.connect(self.clear_display)
         toolbar.addWidget(self.clear_btn)
+
+        # 导出按钮
+        self.export_btn = QPushButton("导出 Excel")
+        self.export_btn.setObjectName("secondaryButton")
+        self.export_btn.clicked.connect(self.export_to_excel)
+        toolbar.addWidget(self.export_btn)
         
         layout.addLayout(toolbar)
         
@@ -447,7 +489,7 @@ class MacOSSerialUI(QWidget):
         
         # 设置 GitHub 图标
         from PyQt6.QtGui import QIcon
-        self.github_btn.setIcon(QIcon("src/resource/GitHub.png"))
+        self.github_btn.setIcon(QIcon(resource_path("src/resource/GitHub.png")))
         self.github_btn.setIconSize(QSize(20, 20))
         
         # 黑夜模式按钮
@@ -459,7 +501,7 @@ class MacOSSerialUI(QWidget):
         self.dark_mode_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         
         # 设置黑夜模式图标
-        self.dark_mode_btn.setIcon(QIcon("src/resource/dark.png"))
+        self.dark_mode_btn.setIcon(QIcon(resource_path("src/resource/dark.png")))
         self.dark_mode_btn.setIconSize(QSize(20, 20))
         
         bottom_buttons.addWidget(self.github_btn)
@@ -697,7 +739,7 @@ class MacOSSerialUI(QWidget):
         """应用 macOS 风格样式"""
         # 加载字体
         from PyQt6.QtGui import QFontDatabase
-        font_id = QFontDatabase.addApplicationFont("src/resource/AlimamaFangYuanTiVF-Thin-2.ttf")
+        font_id = QFontDatabase.addApplicationFont(resource_path("src/resource/AlimamaFangYuanTiVF-Thin-2.ttf"))
         if font_id != -1:
             font_families = QFontDatabase.applicationFontFamilies(font_id)
             if font_families:
@@ -765,13 +807,13 @@ class MacOSSerialUI(QWidget):
             #sidebarTitle {{
                 font-size: 15px;
                 font-weight: 600;
-                color: #1d1d1f;
+                color: {text_color};
             }}
             
             #fieldLabel {{
                 font-size: 11px;
                 font-weight: 500;
-                color: #86868b;
+                color: {"#aaaaaa" if self.is_dark_mode else "#86868b"};
                 text-transform: uppercase;
             }}
             
@@ -797,7 +839,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             QComboBox::down-arrow {{
-                image: url(src/resource/triangle.png);
+                image: url("{resource_path("src/resource/triangle.png").replace(os.sep, "/")}");
                 width: 12px;
                 height: 12px;
             }}
@@ -842,7 +884,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             #secondaryButton:hover {{
-                background-color: #e8e8ed;
+                background-color: {"#505050" if self.is_dark_mode else "#e8e8ed"};
             }}
             
             #statusFrame {{
@@ -852,12 +894,12 @@ class MacOSSerialUI(QWidget):
             }}
             
             #statusDot {{
-                color: #86868b;
+                color: {"#aaaaaa" if self.is_dark_mode else "#86868b"};
                 font-size: 16px;
             }}
             
             #statusText {{
-                color: #86868b;
+                color: {"#aaaaaa" if self.is_dark_mode else "#86868b"};
                 font-size: 12px;
             }}
             
@@ -1197,13 +1239,13 @@ class MacOSSerialUI(QWidget):
             }}
             
             QSpinBox::up-arrow {{
-                image: url(src/resource/triangle.png);
+                image: url("{resource_path("src/resource/triangle.png").replace(os.sep, "/")}");
                 width: 8px;
                 height: 8px;
             }}
             
             QSpinBox::down-arrow {{
-                image: url(src/resource/triangle.png);
+                image: url("{resource_path("src/resource/triangle.png").replace(os.sep, "/")}");
                 width: 8px;
                 height: 8px;
             }}
@@ -1483,8 +1525,15 @@ class MacOSSerialUI(QWidget):
     
     def add_message_bubble(self, text: str, timestamp: str, is_sent: bool = True):
         """添加消息气泡"""
+        # 记录消息用于导出
+        self.message_log.append({
+            "time": timestamp,
+            "direction": "发送" if is_sent else "接收",
+            "content": text,
+        })
+
         # 创建消息容器（包含时间戳和气泡）
-        message_container = QWidget()
+        message_container = MessageContainer()
         container_layout = QVBoxLayout(message_container)
         container_layout.setContentsMargins(0, 4, 0, 4)
         container_layout.setSpacing(2)
@@ -1568,7 +1617,45 @@ class MacOSSerialUI(QWidget):
             """)
         
         container_layout.addWidget(bubble_container)
-        
+
+        # 复制图标行：固定高度避免悬停时布局抖动
+        copy_row = QWidget()
+        copy_row.setFixedHeight(20)
+        copy_row_layout = QHBoxLayout(copy_row)
+        copy_row_layout.setContentsMargins(4, 0, 4, 0)
+        copy_row_layout.setSpacing(0)
+
+        copy_btn = QPushButton(copy_row)
+        copy_btn.setFixedSize(16, 16)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        icon_path = resource_path("src/resource/copy.png")
+        copy_btn.setIcon(QIcon(icon_path))
+        copy_btn.setIconSize(QSize(13, 13))
+        copy_btn.setStyleSheet("QPushButton { background: transparent; border: none; }")
+        copy_btn.setVisible(False)
+
+        copied_label = QLabel("已复制", copy_row)
+        copied_label.setStyleSheet("color: #34c759; font-size: 11px; background: transparent;")
+        copied_label.setVisible(False)
+
+        # 把 text 存到按钮属性上，避免闭包问题
+        copy_btn.setProperty("msg_text", text)
+        copy_btn.clicked.connect(self._on_copy_clicked)
+
+        if is_sent:
+            copy_row_layout.addStretch()
+            copy_row_layout.addWidget(copied_label)
+            copy_row_layout.addWidget(copy_btn)
+        else:
+            copy_row_layout.addWidget(copy_btn)
+            copy_row_layout.addWidget(copied_label)
+            copy_row_layout.addStretch()
+
+        # 把 copy_btn / copied_label 存到 message_container 上供 hover 使用
+        message_container.set_copy_widgets(copy_btn, copied_label)
+
+        container_layout.addWidget(copy_row)
+
         # 插入到消息列表（在stretch之前）
         count = self.messages_layout.count()
         self.messages_layout.insertWidget(count - 1, message_container)
@@ -1578,8 +1665,86 @@ class MacOSSerialUI(QWidget):
             QTimer.singleShot(50, lambda: self.scroll_area.verticalScrollBar().setValue(
                 self.scroll_area.verticalScrollBar().maximum()
             ))
+
+    def _on_copy_clicked(self):
+        """复制按钮点击处理"""
+        btn = self.sender()
+        if btn is None:
+            return
+        msg_text = btn.property("msg_text")
+        if msg_text:
+            QApplication.clipboard().setText(msg_text)
+        # 找到同级的 copied_label（btn 和 label 在同一个 copy_row 里）
+        copy_row = btn.parent()
+        if copy_row is None:
+            return
+        copied_label = None
+        for child in copy_row.children():
+            if isinstance(child, QLabel):
+                copied_label = child
+                break
+        if copied_label is None:
+            return
+        btn.setVisible(False)
+        copied_label.setVisible(True)
+        QTimer.singleShot(1500, lambda: (
+            copied_label.setVisible(False),
+            btn.setVisible(True),
+        ))
     
     
+    def export_to_excel(self):
+        """导出消息记录到 Excel"""
+        if not self.message_log:
+            self.show_macos_alert("提示", "没有可导出的消息记录")
+            return
+        try:
+            import openpyxl
+            from openpyxl.styles import PatternFill, Font, Alignment
+        except ImportError:
+            self.show_macos_alert("缺少依赖", "请先安装 openpyxl：\npip install openpyxl")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 Excel", "消息记录.xlsx", "Excel 文件 (*.xlsx)"
+        )
+        if not path:
+            return
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "消息记录"
+
+        # 表头
+        headers = ["时间", "方向", "内容"]
+        ws.append(headers)
+        header_fill_sent = PatternFill("solid", fgColor="0071E3")
+        header_font = Font(bold=True, color="FFFFFF")
+        for col, _ in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col)
+            cell.fill = header_fill_sent
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # 数据行
+        sent_fill = PatternFill("solid", fgColor="D6EAFF")
+        recv_fill = PatternFill("solid", fgColor="F2F2F7")
+        for msg in self.message_log:
+            ws.append([msg["time"], msg["direction"], msg["content"]])
+            row = ws.max_row
+            fill = sent_fill if msg["direction"] == "发送" else recv_fill
+            for col in range(1, 4):
+                ws.cell(row=row, column=col).fill = fill
+                ws.cell(row=row, column=col).alignment = Alignment(wrap_text=True, vertical="center")
+
+        # 列宽
+        ws.column_dimensions["A"].width = 22
+        ws.column_dimensions["B"].width = 8
+        ws.column_dimensions["C"].width = 60
+
+        wb.save(path)
+        self.show_macos_alert("导出成功", f"已保存到：\n{path}")
+
     def clear_display(self):
         """清除显示"""
         # 清除所有消息气泡
@@ -1592,6 +1757,7 @@ class MacOSSerialUI(QWidget):
         self.sent_bytes = 0
         self.received_count = 0
         self.received_bytes = 0
+        self.message_log.clear()
         self.update_stats()
     
     def on_data_received(self, data: bytes):
