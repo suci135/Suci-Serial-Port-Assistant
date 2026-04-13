@@ -1,9 +1,7 @@
-PyQt6==6.6.1
-pyserial==3.5
-qasync==0.27.1
+PyQt6>=6.10.0
+pyserial>=3.5
+qasync>=0.27.1
 pyinstaller>=6.0.0
 openpyxl>=3.1.0
-# 蓝牙支持（可选）
-# Windows 推荐使用 bleak: pip install bleak
-# Linux/macOS 可使用 pybluez: pip install pybluez
 bleak>=0.21.0
+Pillow>=12.0.0
