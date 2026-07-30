@@ -6,6 +6,7 @@ macOS 原生风格串口调试工具 UI - 支持串口和蓝牙
 import json
 import os
 import sys
+import time
 from typing import List
 from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
@@ -14,9 +15,20 @@ from datetime import datetime
 
 from ..core.app_config import AppConfig
 from ..core.quick_command_store import QuickCommandStore
+from ..core.session_recorder import SessionRecorder
+from ..core.command_sequence import CommandSequenceRunner
 from ..core.resources import resource_path as get_resource_path
 from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
+from .layout_metrics import (
+    CONTENT_MARGIN,
+    LEFT_SIDEBAR_WIDTH,
+    RIGHT_SIDEBAR_WIDTH,
+    SECTION_SPACING,
+    SIDEBAR_HORIZONTAL_MARGIN,
+    SIDEBAR_VERTICAL_MARGIN,
+    TOOLBAR_SPACING,
+)
 
 
 def resource_path(relative_path: str) -> str:
@@ -69,9 +81,15 @@ class MacOSSerialUI(QWidget):
         self.sent_bytes = 0
         self.received_count = 0
         self.received_bytes = 0
+        self._rate_timestamp = time.monotonic()
+        self._rate_sent_bytes = 0
+        self._rate_received_bytes = 0
+        self._send_rate = 0.0
+        self._receive_rate = 0.0
 
         # 消息记录（用于导出）
         self.message_log = []  # [{"time": str, "direction": str, "content": str}]
+        self.session_recorder = SessionRecorder()
 
         # 黑夜模式状态
         self.is_dark_mode = False
@@ -87,6 +105,12 @@ class MacOSSerialUI(QWidget):
         self.connecting_timer = QTimer()
         self.connecting_timer.timeout.connect(self.update_connecting_animation)
         self.connecting_dots = 0
+        self.repeat_timer = QTimer(self)
+        self.repeat_timer.timeout.connect(self.send_data)
+        self.sequence_runner = CommandSequenceRunner(self)
+        self.sequence_runner.command_sent.connect(self._on_sequence_command_sent)
+        self.sequence_runner.command_result.connect(self._on_sequence_command_result)
+        self.sequence_runner.completed.connect(self._on_sequence_completed)
         
         self.init_ui()
         self.apply_macos_style()
@@ -106,7 +130,7 @@ class MacOSSerialUI(QWidget):
         
         # 左侧空白区域（对应左侧边栏宽度）
         left_spacer = QWidget()
-        left_spacer.setFixedWidth(179)  # 与左侧边栏宽度保持一致
+        left_spacer.setFixedWidth(LEFT_SIDEBAR_WIDTH)
         left_spacer.setObjectName("leftSpacer")
         top_line_container.addWidget(left_spacer)
         
@@ -123,44 +147,49 @@ class MacOSSerialUI(QWidget):
         content_layout = QHBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
-        
+
         # 左侧边栏
         left_sidebar = self.create_left_sidebar()
         content_layout.addWidget(left_sidebar)
-        
+
         # 左中分界线
         left_center_separator = QFrame()
         left_center_separator.setObjectName("leftCenterSeparator")
         left_center_separator.setFrameShape(QFrame.Shape.VLine)
         left_center_separator.setFixedWidth(1)
         content_layout.addWidget(left_center_separator)
-        
+
         # 中央内容区
         center_content = self.create_center_content()
         content_layout.addWidget(center_content, 1)
-        
+
         # 中右分界线
         center_right_separator = QFrame()
         center_right_separator.setObjectName("centerRightSeparator")
         center_right_separator.setFrameShape(QFrame.Shape.VLine)
         center_right_separator.setFixedWidth(1)
         content_layout.addWidget(center_right_separator)
-        
+
         # 右侧边栏
         right_sidebar = self.create_right_sidebar()
         content_layout.addWidget(right_sidebar)
-        
+
         main_layout.addLayout(content_layout)
 
     def create_left_sidebar(self):
         """创建左侧边栏 - 串口/蓝牙连接设置"""
         sidebar = QFrame()
         sidebar.setObjectName("leftSidebar")
-        sidebar.setFixedWidth(179)
+        sidebar.setFixedWidth(LEFT_SIDEBAR_WIDTH)
         
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(10, 20, 10, 20)
-        layout.setSpacing(10)
+        layout.setContentsMargins(
+            SIDEBAR_HORIZONTAL_MARGIN,
+            SIDEBAR_VERTICAL_MARGIN,
+            SIDEBAR_HORIZONTAL_MARGIN,
+            SIDEBAR_VERTICAL_MARGIN,
+        )
+        layout.setSpacing(SECTION_SPACING)
         
         # 模式选择
         mode_label = QLabel("模式")
@@ -198,7 +227,7 @@ class MacOSSerialUI(QWidget):
         self.serial_config_widget = QWidget()
         serial_config_layout = QVBoxLayout(self.serial_config_widget)
         serial_config_layout.setContentsMargins(0, 0, 0, 0)
-        serial_config_layout.setSpacing(10)
+        serial_config_layout.setSpacing(7)
         
         # Baud Rate
         baud_label = QLabel("波特率")
@@ -243,19 +272,20 @@ class MacOSSerialUI(QWidget):
         self.bluetooth_config_widget = QWidget()
         bluetooth_config_layout = QVBoxLayout(self.bluetooth_config_widget)
         bluetooth_config_layout.setContentsMargins(0, 0, 0, 0)
-        bluetooth_config_layout.setSpacing(10)
+        bluetooth_config_layout.setSpacing(7)
         
         # PyBluez 配置（经典蓝牙）
         self.pybluez_config_widget = QWidget()
         pybluez_config_layout = QVBoxLayout(self.pybluez_config_widget)
         pybluez_config_layout.setContentsMargins(0, 0, 0, 0)
-        pybluez_config_layout.setSpacing(10)
+        pybluez_config_layout.setSpacing(7)
         
         # RFCOMM端口
         port_label = QLabel("RFCOMM端口")
         port_label.setObjectName("compactLabel")
         pybluez_config_layout.addWidget(port_label)
         self.rfcomm_port_spin = QSpinBox()
+        self.rfcomm_port_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.rfcomm_port_spin.setRange(1, 30)
         self.rfcomm_port_spin.setValue(1)
         pybluez_config_layout.addWidget(self.rfcomm_port_spin)
@@ -308,23 +338,23 @@ class MacOSSerialUI(QWidget):
         content.setObjectName("centerContent")
         
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
+        layout.setContentsMargins(CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN, 10)
+        layout.setSpacing(10)
         
         # 顶部工具栏
         toolbar = QHBoxLayout()
-        toolbar.setSpacing(12)
+        toolbar.setSpacing(TOOLBAR_SPACING)
         
         # 格式选择
         toolbar.addWidget(QLabel("格式:"))
         self.format_combo = QComboBox()
         self.format_combo.addItems(["HEX", "ASCII", "UTF-8"])
         self.format_combo.setCurrentText("UTF-8")
-        self.format_combo.setMinimumWidth(120)
-        self.format_combo.setMaximumWidth(150)
+        self.format_combo.setMinimumWidth(100)
+        self.format_combo.setMaximumWidth(130)
         toolbar.addWidget(self.format_combo)
         
-        toolbar.addSpacing(16)
+        toolbar.addSpacing(8)
         
         # 时间戳
         self.timestamp_check = QCheckBox("显示时间戳")
@@ -336,6 +366,14 @@ class MacOSSerialUI(QWidget):
         self.autoscroll_check = QCheckBox("自动滚动")
         self.autoscroll_check.setChecked(True)
         toolbar.addWidget(self.autoscroll_check)
+
+        # 消息搜索
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("搜索消息...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setMaximumWidth(140)
+        self.search_input.textChanged.connect(self.filter_messages)
+        toolbar.addWidget(self.search_input)
         
         toolbar.addStretch()
         
@@ -345,11 +383,19 @@ class MacOSSerialUI(QWidget):
         self.clear_btn.clicked.connect(self.clear_display)
         toolbar.addWidget(self.clear_btn)
 
+        # 会话录制
+        self.record_btn = QPushButton("录制")
+        self.record_btn.setObjectName("secondaryButton")
+        self.record_btn.setToolTip("将收发原始数据保存为 CSV")
+        self.record_btn.clicked.connect(self.toggle_recording)
+        toolbar.addWidget(self.record_btn)
+
         # 导出按钮
         self.export_btn = QPushButton("导出 Excel")
         self.export_btn.setObjectName("secondaryButton")
         self.export_btn.clicked.connect(self.export_to_excel)
         toolbar.addWidget(self.export_btn)
+
         
         layout.addLayout(toolbar)
         
@@ -372,8 +418,8 @@ class MacOSSerialUI(QWidget):
         self.messages_widget = QWidget()
         self.messages_widget.setObjectName("messagesWidget")
         self.messages_layout = QVBoxLayout(self.messages_widget)
-        self.messages_layout.setContentsMargins(10, 10, 10, 10)
-        self.messages_layout.setSpacing(8)
+        self.messages_layout.setContentsMargins(8, 8, 8, 8)
+        self.messages_layout.setSpacing(6)
         self.messages_layout.addStretch()
         
         self.scroll_area.setWidget(self.messages_widget)
@@ -383,7 +429,7 @@ class MacOSSerialUI(QWidget):
         
         # 底部状态栏
         status_bar = QHBoxLayout()
-        status_bar.setSpacing(20)
+        status_bar.setSpacing(12)
         
         self.sent_stats = QLabel("发送: 0 (0 字节)")
         self.sent_stats.setObjectName("statsLabel")
@@ -392,6 +438,10 @@ class MacOSSerialUI(QWidget):
         self.received_stats = QLabel("接收: 0 (0 字节)")
         self.received_stats.setObjectName("statsLabel")
         status_bar.addWidget(self.received_stats)
+
+        self.rate_stats = QLabel("速率: ↓ 0 B/s  ↑ 0 B/s")
+        self.rate_stats.setObjectName("statsLabel")
+        status_bar.addWidget(self.rate_stats)
         
         status_bar.addStretch()
         
@@ -403,11 +453,11 @@ class MacOSSerialUI(QWidget):
         """创建右侧边栏 - 发送控制和快捷输入面板"""
         sidebar = QFrame()
         sidebar.setObjectName("rightSidebar")
-        sidebar.setFixedWidth(350)  # 从380减少到350，进一步缩窄右侧
+        sidebar.setFixedWidth(RIGHT_SIDEBAR_WIDTH)
         
         layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(16, 20, 16, 20)
-        layout.setSpacing(12)  # 减少间距
+        layout.setContentsMargins(12, SIDEBAR_VERTICAL_MARGIN, 12, 10)
+        layout.setSpacing(SECTION_SPACING)
         
         # 发送区域标题
         send_title = QLabel("发送控制")
@@ -427,7 +477,7 @@ class MacOSSerialUI(QWidget):
         # 输入区域
         input_container = QFrame()
         input_container.setObjectName("sendInputContainer")
-        input_container.setMaximumHeight(100)  # 减少高度
+        input_container.setMaximumHeight(84)
         input_container_layout = QVBoxLayout(input_container)
         input_container_layout.setContentsMargins(0, 0, 0, 0)
         input_container_layout.setSpacing(0)
@@ -435,7 +485,7 @@ class MacOSSerialUI(QWidget):
         self.send_input = QTextEdit()
         self.send_input.setObjectName("sendInput")
         self.send_input.setPlaceholderText("发送数据...")
-        self.send_input.setMaximumHeight(96)  # 减少高度
+        self.send_input.setMaximumHeight(80)
         self.send_input.setFrameShape(QFrame.Shape.NoFrame)
         input_container_layout.addWidget(self.send_input)
         
@@ -447,8 +497,21 @@ class MacOSSerialUI(QWidget):
         # 发送选项
         self.add_newline = QCheckBox("\\n")
         self.add_carriage = QCheckBox("\\r")
+        self.repeat_check = QCheckBox("循环")
+        self.repeat_check.setToolTip("按设定间隔重复发送当前输入")
+        self.repeat_check.stateChanged.connect(self.toggle_repeat_send)
+        self.repeat_interval_spin = QSpinBox()
+        self.repeat_interval_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.repeat_interval_spin.setRange(50, 60000)
+        self.repeat_interval_spin.setValue(1000)
+        self.repeat_interval_spin.setSuffix(" ms")
+        self.repeat_interval_spin.setMaximumWidth(78)
+        self.repeat_interval_spin.setToolTip("循环发送间隔")
+        self.repeat_interval_spin.valueChanged.connect(self.update_repeat_interval)
         send_controls_layout.addWidget(self.add_newline)
         send_controls_layout.addWidget(self.add_carriage)
+        send_controls_layout.addWidget(self.repeat_check)
+        send_controls_layout.addWidget(self.repeat_interval_spin)
         send_controls_layout.addStretch()
         
         # 发送按钮
@@ -517,8 +580,8 @@ class MacOSSerialUI(QWidget):
         header_frame = QFrame()
         header_frame.setObjectName("quickInputHeader")
         header_layout = QHBoxLayout(header_frame)
-        header_layout.setContentsMargins(8, 6, 8, 6)
-        header_layout.setSpacing(8)
+        header_layout.setContentsMargins(6, 4, 6, 4)
+        header_layout.setSpacing(6)
         
         # 表头标签
         content_label = QLabel("内容")
@@ -527,7 +590,7 @@ class MacOSSerialUI(QWidget):
         
         action_label = QLabel("操作")
         action_label.setObjectName("headerLabel")
-        action_label.setFixedWidth(90)  # 从110减少到90，与操作按钮宽度一致
+        action_label.setFixedWidth(82)
         action_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(action_label)
         
@@ -539,7 +602,8 @@ class MacOSSerialUI(QWidget):
         scroll_area.setWidgetResizable(True)
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll_area.setMaximumHeight(250)  # 增加高度
+        scroll_area.setMinimumHeight(160)
+        scroll_area.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         
         # 命令列表容器
         commands_widget = QWidget()
@@ -562,20 +626,33 @@ class MacOSSerialUI(QWidget):
         add_btn.setObjectName("addCommandButton")
         add_btn.clicked.connect(self.add_new_command)
         parent_layout.addWidget(add_btn)
+
+        sequence_layout = QHBoxLayout()
+        self.run_sequence_btn = QPushButton("执行启用命令")
+        self.run_sequence_btn.setObjectName("secondaryButton")
+        self.run_sequence_btn.setToolTip("按命令列表中的启用状态和延时依次发送")
+        self.run_sequence_btn.clicked.connect(self.run_enabled_commands)
+        self.stop_sequence_btn = QPushButton("停止")
+        self.stop_sequence_btn.setObjectName("secondaryButton")
+        self.stop_sequence_btn.setEnabled(False)
+        self.stop_sequence_btn.clicked.connect(self.stop_command_sequence)
+        sequence_layout.addWidget(self.run_sequence_btn)
+        sequence_layout.addWidget(self.stop_sequence_btn)
+        parent_layout.addLayout(sequence_layout)
     
     def create_command_row(self, cmd_data, index):
         """创建命令行"""
         row_frame = QFrame()
         row_frame.setObjectName("commandRow")
         row_layout = QHBoxLayout(row_frame)
-        row_layout.setContentsMargins(4, 4, 4, 4)
-        row_layout.setSpacing(4)
+        row_layout.setContentsMargins(3, 3, 3, 3)
+        row_layout.setSpacing(3)
         
         # 命令内容（可编辑）- 现在占据更多空间
         content_container = QFrame()
         content_container.setObjectName("commandContentContainer")
         content_container_layout = QVBoxLayout(content_container)
-        content_container_layout.setContentsMargins(10, 4, 10, 4)
+        content_container_layout.setContentsMargins(8, 3, 8, 3)
         content_container_layout.setSpacing(2)
         
         command_edit = QLineEdit(cmd_data["command"])
@@ -595,7 +672,7 @@ class MacOSSerialUI(QWidget):
         
         # 操作按钮
         action_layout = QHBoxLayout()
-        action_layout.setSpacing(5)
+        action_layout.setSpacing(4)
         
         send_btn = QPushButton("发送")
         send_btn.setObjectName("quickSendButton")
@@ -609,7 +686,7 @@ class MacOSSerialUI(QWidget):
         
         action_widget = QWidget()
         action_widget.setLayout(action_layout)
-        action_widget.setFixedWidth(90)  # 从110减少到90，给内容框更多空间
+        action_widget.setFixedWidth(82)
         row_layout.addWidget(action_widget)
         
         # 保存行数据
@@ -777,7 +854,7 @@ class MacOSSerialUI(QWidget):
                 font-weight: bold;
             }}
             
-            QLabel, QPushButton, QComboBox, QCheckBox, QTextEdit {{
+            QLabel, QPushButton, QComboBox, QCheckBox, QTextEdit, QLineEdit, QSpinBox {{
                 font-family: "{font_family}";
                 font-weight: bold;
             }}
@@ -829,6 +906,19 @@ class MacOSSerialUI(QWidget):
             }}
             
             QComboBox:hover {{
+                border-color: #0071e3;
+            }}
+
+            QLineEdit, QSpinBox {{
+                background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 6px;
+                padding: 5px 8px;
+                min-height: 20px;
+            }}
+
+            QLineEdit:focus, QSpinBox:focus {{
                 border-color: #0071e3;
             }}
             
@@ -1228,27 +1318,19 @@ class MacOSSerialUI(QWidget):
                 border-color: #0071e3;
             }}
             
-            QSpinBox::up-button, QSpinBox::down-button {{
-                background-color: {button_bg};
+            QSpinBox::up-button, QSpinBox::down-button,
+            QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {{
                 border: none;
-                width: 16px;
-                border-radius: 3px;
+                width: 0px;
+                height: 0px;
+                subcontrol-position: top right;
             }}
-            
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
-                background-color: {border_color};
-            }}
-            
-            QSpinBox::up-arrow {{
-                image: url("{resource_path("src/resource/triangle.png").replace(os.sep, "/")}");
-                width: 8px;
-                height: 8px;
-            }}
-            
-            QSpinBox::down-arrow {{
-                image: url("{resource_path("src/resource/triangle.png").replace(os.sep, "/")}");
-                width: 8px;
-                height: 8px;
+
+            QSpinBox::up-arrow, QSpinBox::down-arrow,
+            QAbstractSpinBox::up-arrow, QAbstractSpinBox::down-arrow {{
+                image: none;
+                width: 0px;
+                height: 0px;
             }}
         """)
     
@@ -1452,8 +1534,9 @@ class MacOSSerialUI(QWidget):
         # 先在UI显示发送的数据
         self.display_sent_data(display_text, format_type)
         
-        # 清空输入框
-        self.send_input.clear()
+        # 循环发送时保留输入内容，普通发送后清空输入框
+        if not self.repeat_check.isChecked():
+            self.send_input.clear()
         
         # 添加换行符
         if self.add_newline.isChecked():
@@ -1483,9 +1566,61 @@ class MacOSSerialUI(QWidget):
         
         # 立即更新统计
         self.update_stats()
+
+    def run_enabled_commands(self):
+        manager = self.serial_manager if self.current_mode == "serial" else self.bluetooth_manager
+        if not manager.is_connected:
+            self.on_error("设备未连接")
+            return
+        if self.sequence_runner.start(
+            self.quick_commands,
+            self.send_format_combo.currentText(),
+            self._send_sequence_command,
+        ):
+            self.run_sequence_btn.setEnabled(False)
+            self.stop_sequence_btn.setEnabled(True)
+
+    def stop_command_sequence(self):
+        self.sequence_runner.stop()
+
+    def _send_sequence_command(self, command: str, format_type: str) -> bool:
+        manager = self.serial_manager if self.current_mode == "serial" else self.bluetooth_manager
+        if format_type == "HEX":
+            return manager.send_hex_string(command)
+        encoding = "ascii" if format_type == "ASCII" else "utf-8"
+        return manager.send_text(command, encoding)
+
+    def _on_sequence_command_sent(self, command: str, format_type: str):
+        self.display_sent_data(command, format_type)
+
+    def _on_sequence_command_result(self, index: int, success: bool, byte_count: int):
+        if success:
+            self.sent_count += 1
+            self.sent_bytes += byte_count
+            self.update_stats()
+
+    def _on_sequence_completed(self):
+        self.run_sequence_btn.setEnabled(True)
+        self.stop_sequence_btn.setEnabled(False)
+
+    def toggle_repeat_send(self, state):
+        """Start or stop repeated sending without blocking the UI thread."""
+        if state == Qt.CheckState.Checked.value:
+            if not self.send_input.toPlainText().strip():
+                self.repeat_check.setChecked(False)
+                self.on_error("请先输入要循环发送的数据")
+                return
+            self.repeat_timer.start(1000)
+        else:
+            self.repeat_timer.stop()
+
+    def update_repeat_interval(self, interval: int):
+        if self.repeat_timer.isActive():
+            self.repeat_timer.start(interval)
     
     def display_sent_data(self, text: str, format_type: str):
         """在数据显示区显示发送的数据 - QQ聊天样式（右对齐，蓝色气泡）"""
+        self._record_payload("发送", text, format_type)
         # 格式化显示
         if format_type == "HEX":
             try:
@@ -1510,6 +1645,49 @@ class MacOSSerialUI(QWidget):
             import traceback
             traceback.print_exc()
     
+    def _record_payload(self, direction: str, text: str, format_type: str):
+        """Convert displayed text back to bytes for lossless session logging."""
+        try:
+            if format_type == "HEX":
+                hex_text = "".join(c for c in text if c in "0123456789abcdefABCDEF")
+                if len(hex_text) % 2:
+                    hex_text = "0" + hex_text
+                payload = bytes.fromhex(hex_text)
+            elif format_type == "ASCII":
+                payload = text.encode("ascii", errors="replace")
+            else:
+                payload = text.encode("utf-8")
+            self.session_recorder.record(direction, payload)
+        except (TypeError, ValueError, UnicodeError):
+            pass
+
+    def toggle_recording(self):
+        """Start or stop a CSV session recording."""
+        if self.session_recorder.is_recording:
+            path = self.session_recorder.stop()
+            self.record_btn.setText("录制")
+            self.record_btn.setToolTip("将收发原始数据保存为 CSV")
+            if path:
+                self.show_macos_alert("录制完成", f"会话已保存到：\n{path}")
+            return
+
+        default_name = datetime.now().strftime("serial_session_%Y%m%d_%H%M%S.csv")
+        path, _ = QFileDialog.getSaveFileName(self, "保存会话记录", default_name, "CSV 文件 (*.csv)")
+        if path and self.session_recorder.start(path):
+            self.record_btn.setText("停止录制")
+            self.record_btn.setToolTip("停止并保存当前会话")
+
+    def filter_messages(self, query: str):
+        """Filter message bubbles without deleting recorded data."""
+        normalized_query = query.casefold().strip()
+        for index in range(self.messages_layout.count()):
+            item = self.messages_layout.itemAt(index)
+            widget = item.widget() if item else None
+            if widget is None or widget.property("message_text") is None:
+                continue
+            message_text = str(widget.property("message_text"))
+            widget.setVisible(not normalized_query or normalized_query in message_text)
+
     def toggle_timestamps(self):
         """切换时间戳显示"""
         show_timestamps = self.timestamp_check.isChecked()
@@ -1535,6 +1713,7 @@ class MacOSSerialUI(QWidget):
 
         # 创建消息容器（包含时间戳和气泡）
         message_container = MessageContainer()
+        message_container.setProperty("message_text", text.casefold())
         container_layout = QVBoxLayout(message_container)
         container_layout.setContentsMargins(0, 4, 0, 4)
         container_layout.setSpacing(2)
@@ -1763,6 +1942,7 @@ class MacOSSerialUI(QWidget):
     
     def on_data_received(self, data: bytes):
         """接收到数据 - QQ聊天样式（左对齐，灰色气泡）"""
+        self.session_recorder.record("接收", data)
         self.received_count += 1
         self.received_bytes += len(data)
         self.update_stats()
@@ -1873,6 +2053,17 @@ class MacOSSerialUI(QWidget):
         """更新统计信息"""
         self.sent_stats.setText(f"发送: {self.sent_count} ({self.sent_bytes} 字节)")
         self.received_stats.setText(f"接收: {self.received_count} ({self.received_bytes} 字节)")
+        now = time.monotonic()
+        elapsed = now - self._rate_timestamp
+        if elapsed >= 0.25:
+            self._send_rate = (self.sent_bytes - self._rate_sent_bytes) / elapsed
+            self._receive_rate = (self.received_bytes - self._rate_received_bytes) / elapsed
+            self._rate_timestamp = now
+            self._rate_sent_bytes = self.sent_bytes
+            self._rate_received_bytes = self.received_bytes
+            self.rate_stats.setText(
+                f"速率: ↓ {self._receive_rate:.0f} B/s  ↑ {self._send_rate:.0f} B/s"
+            )
     
     def toggle_dark_mode(self):
         """切换黑夜模式"""
@@ -1993,3 +2184,19 @@ class MacOSSerialUI(QWidget):
     def save_quick_commands(self):
         """保存快捷命令到配置文件"""
         self.quick_command_store.save(self.quick_commands)
+
+    def closeEvent(self, event):
+        self.repeat_timer.stop()
+        self.session_recorder.stop()
+        super().closeEvent(event)
+
+    def resizeEvent(self, event):
+        """Keep the center toolbar readable at compact window sizes."""
+        width = self.width()
+        compact = width < 1050
+        very_compact = width < 960
+        self.search_input.setVisible(not compact)
+        self.export_btn.setVisible(not compact)
+        self.autoscroll_check.setVisible(not very_compact)
+        self.clear_btn.setText("清" if very_compact else "清除")
+        super().resizeEvent(event)

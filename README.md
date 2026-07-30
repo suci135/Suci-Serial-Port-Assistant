@@ -11,7 +11,9 @@
 - 蓝牙 BLE 通信，支持设备扫描与连接
 - 多种数据格式：HEX、ASCII、UTF-8
 - 消息气泡界面，支持时间戳、一键复制、导出 Excel
+- 消息搜索过滤、原始收发会话 CSV 录制、实时收发速率
 - 快捷命令面板，支持自定义命令、延迟发送、HEX 模式
+- 支持循环发送和可扩展的数据帧解析
 - 实时收发字节统计
 
 ## 下载安装
@@ -48,6 +50,9 @@ python main.py
     ├── core/
     │   ├── app_config.py        # 应用配置
     │   ├── resources.py         # 统一资源路径
+    │   ├── data_framer.py       # 数据帧解析
+    │   ├── quick_command_store.py # 快捷命令存储
+    │   ├── session_recorder.py  # 会话录制
     │   ├── serial_manager.py    # 串口管理
     │   └── bluetooth_manager.py # 蓝牙管理
     ├── ui/

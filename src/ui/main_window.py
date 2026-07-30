@@ -17,6 +17,7 @@ import qasync
 from src.ui.macos_ui import MacOSSerialUI
 from src.core.app_config import AppConfig
 from src.core.serial_manager import SerialManager
+from src.ui.layout_metrics import LEFT_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH
 
 
 def resource_path(relative_path: str) -> str:
@@ -307,7 +308,7 @@ class MainWindow(QMainWindow):
         
         # 左侧按钮组容器
         left_buttons = QWidget()
-        left_buttons.setFixedWidth(179)  # 从219减少到179，匹配左侧边栏宽度
+        left_buttons.setFixedWidth(LEFT_SIDEBAR_WIDTH)
         left_layout = QHBoxLayout(left_buttons)
         left_layout.setContentsMargins(12, 0, 12, 0)
         left_layout.setSpacing(8)
@@ -356,38 +357,38 @@ class MainWindow(QMainWindow):
         
         # 右侧按钮组容器
         right_buttons = QWidget()
-        right_buttons.setFixedWidth(350)  # 匹配新的右侧边栏宽度
+        right_buttons.setFixedWidth(RIGHT_SIDEBAR_WIDTH)
         right_layout = QHBoxLayout(right_buttons)
         right_layout.setContentsMargins(12, 0, 12, 0)
         right_layout.setSpacing(8)
-        
+
         right_layout.addStretch()
-        
+
         close_btn_r = QPushButton()
         close_btn_r.setObjectName("closeBtn")
         close_btn_r.setProperty("class", "macButton")
         close_btn_r.setFixedSize(12, 12)
         close_btn_r.clicked.connect(self.close)
         close_btn_r.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         minimize_btn_r = QPushButton()
         minimize_btn_r.setObjectName("minimizeBtn")
         minimize_btn_r.setProperty("class", "macButton")
         minimize_btn_r.setFixedSize(12, 12)
         minimize_btn_r.clicked.connect(self.showMinimized)
         minimize_btn_r.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         maximize_btn_r = QPushButton()
         maximize_btn_r.setObjectName("maximizeBtn")
         maximize_btn_r.setProperty("class", "macButton")
         maximize_btn_r.setFixedSize(12, 12)
         maximize_btn_r.clicked.connect(self.toggle_maximize)
         maximize_btn_r.setCursor(Qt.CursorShape.PointingHandCursor)
-        
+
         right_layout.addWidget(maximize_btn_r)
         right_layout.addWidget(minimize_btn_r)
         right_layout.addWidget(close_btn_r)
-        
+
         layout.addWidget(right_buttons)
         
         return title_bar
