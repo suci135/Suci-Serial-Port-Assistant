@@ -9,6 +9,7 @@ from typing import List, Optional, Callable, Dict, Any
 from PyQt6.QtCore import QObject, pyqtSignal
 import threading
 import time
+from .data_framer import DataFrameParser
 
 
 class SerialDevice:
@@ -51,6 +52,12 @@ class SerialManager(QObject):
         self._is_connected = False
         self._read_thread: Optional[threading.Thread] = None
         self._stop_reading = threading.Event()
+        self._reconnect_stop = threading.Event()
+        self._reconnect_thread: Optional[threading.Thread] = None
+        self._last_port: Optional[str] = None
+        self._manual_disconnect = False
+        self._auto_reconnect = True
+        self._frame_parser = DataFrameParser()
         self._config = {
             'baudrate': 9600,
             'bytesize': serial.EIGHTBITS,
@@ -119,8 +126,10 @@ class SerialManager(QObject):
             except Exception as e:
                 self.error_occurred.emit(f"动态修改配置失败: {str(e)}")
     
-    def connect(self, port: str) -> bool:
+    def connect(self, port: str, suppress_error: bool = False) -> bool:
         """连接到指定串口"""
+        self._manual_disconnect = False
+        self._last_port = port
         if self._is_connected:
             self.disconnect()
         
@@ -134,11 +143,14 @@ class SerialManager(QObject):
             return True
         except serial.SerialException as e:
             self.connecting_status.emit("")
-            self.error_occurred.emit(f"连接串口失败: {str(e)}")
+            if not suppress_error:
+                self.error_occurred.emit(f"连接串口失败: {str(e)}")
             return False
     
     def disconnect(self):
         """断开串口连接"""
+        self._manual_disconnect = True
+        self._reconnect_stop.set()
         if not self._is_connected:
             return
         
@@ -153,7 +165,48 @@ class SerialManager(QObject):
         
         self._serial = None
         self._stop_reading.clear()
+        self._frame_parser.reset()
         self.device_disconnected.emit()
+
+    def set_auto_reconnect(self, enabled: bool):
+        """Enable or disable reconnect attempts after an unexpected disconnect."""
+        self._auto_reconnect = enabled
+        if not enabled:
+            self._reconnect_stop.set()
+
+    def set_frame_separator(self, separator: Optional[bytes]):
+        """Use a separator for complete frames, or None for idle flushing."""
+        self._frame_parser.separator = separator
+        self._frame_parser.reset()
+
+    def _handle_unexpected_disconnect(self, error: str):
+        if not self._is_connected:
+            return
+        self._is_connected = False
+        self._stop_reading.set()
+        if self._serial and self._serial.is_open:
+            self._serial.close()
+        self._serial = None
+        self.error_occurred.emit(f"串口已断开: {error}")
+        self.device_disconnected.emit()
+        if self._auto_reconnect and not self._manual_disconnect and self._last_port:
+            self._start_reconnect()
+
+    def _start_reconnect(self):
+        if self._reconnect_thread and self._reconnect_thread.is_alive():
+            return
+        self._reconnect_stop.clear()
+        self._reconnect_thread = threading.Thread(target=self._reconnect_loop, daemon=True)
+        self._reconnect_thread.start()
+
+    def _reconnect_loop(self):
+        while not self._reconnect_stop.wait(2.0):
+            if self._manual_disconnect or not self._last_port:
+                return
+            self.connecting_status.emit("正在重连...")
+            if self.connect(self._last_port, suppress_error=True):
+                return
+        self.connecting_status.emit("")
     
     def _start_reading(self):
         """启动数据读取线程"""
@@ -177,7 +230,11 @@ class SerialManager(QObject):
                 # 如果缓冲区有数据且超过一定时间没有新数据，则发送缓冲区数据
                 current_time = time.time()
                 if buffer and (current_time - last_data_time) > 0.01:  # 10ms 超时
-                    self.data_received.emit(bytes(buffer))
+                    if self._frame_parser.separator:
+                        for frame in self._frame_parser.feed(bytes(buffer)):
+                            self.data_received.emit(frame)
+                    else:
+                        self.data_received.emit(bytes(buffer))
                     buffer.clear()
                 
                 time.sleep(0.001)  # 1ms 延迟
@@ -187,7 +244,7 @@ class SerialManager(QObject):
                     err_msg = str(e)
                     # 设备真正断开才报错弹窗，临时读取异常只打印日志
                     if self._serial and not self._serial.is_open:
-                        self.error_occurred.emit(f"串口已断开: {err_msg}")
+                        self._handle_unexpected_disconnect(err_msg)
                         break
                     else:
                         print(f"[SerialManager] 读取异常(忽略): {err_msg}")
@@ -199,7 +256,14 @@ class SerialManager(QObject):
         
         # 发送剩余缓冲区数据
         if buffer:
-            self.data_received.emit(bytes(buffer))
+            if self._frame_parser.separator:
+                for frame in self._frame_parser.feed(bytes(buffer)):
+                    self.data_received.emit(frame)
+                remaining = self._frame_parser.flush()
+                if remaining:
+                    self.data_received.emit(remaining)
+            else:
+                self.data_received.emit(bytes(buffer))
     
     def send_data(self, data: bytes) -> bool:
         """发送数据"""

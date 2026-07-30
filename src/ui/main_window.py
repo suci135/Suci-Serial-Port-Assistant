@@ -9,9 +9,9 @@ BaudDance Serial Assistant - Python Version
 import sys
 import asyncio
 import os
-from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation
-from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QSizePolicy
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation, QEvent
+from PyQt6.QtGui import QFont, QMouseEvent
 import qasync
 
 from src.ui.macos_ui import MacOSSerialUI
@@ -38,6 +38,7 @@ class MainWindow(QMainWindow):
         # 设置窗口为无边框
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMouseTracking(True)
         
         # 设置窗口
         self.setWindowTitle("Suci的串口/蓝牙助手")
@@ -61,6 +62,10 @@ class MainWindow(QMainWindow):
         
         # 创建 UI
         self.ui = MacOSSerialUI(config, self.serial_manager)
+        self.ui.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
         main_layout.addWidget(self.ui)
         
         self.setCentralWidget(main_container)
@@ -70,6 +75,12 @@ class MainWindow(QMainWindow):
         
         # 用于窗口拖动
         self.drag_position = None
+        self._resize_edges = Qt.Edge(0)
+        self._resize_start_position = None
+        self._resize_start_geometry = None
+        self._resize_margin = 8
+        self._dragging_window = False
+        self._event_filter_installed = False
         
         # 保存窗口默认大小和位置
         self.default_geometry = self.geometry()
@@ -79,6 +90,109 @@ class MainWindow(QMainWindow):
         self.resize_animation = QPropertyAnimation(self, b"geometry")
         self.resize_animation.setDuration(420)
         self.resize_animation.setEasingCurve(QEasingCurve.Type.InOutQuart)
+
+    def showEvent(self, event):
+        if not self._event_filter_installed:
+            self.installEventFilter(self)
+            for child in self.findChildren(QWidget):
+                child.installEventFilter(self)
+            self._event_filter_installed = True
+        super().showEvent(event)
+
+    def _window_edges_at(self, position):
+        """Return the resize edges under a global mouse position."""
+        rect = self.frameGeometry()
+        margin = self._resize_margin
+        edges = Qt.Edge(0)
+        if rect.left() <= position.x() <= rect.left() + margin:
+            edges |= Qt.Edge.LeftEdge
+        elif rect.right() - margin <= position.x() <= rect.right():
+            edges |= Qt.Edge.RightEdge
+        if rect.top() <= position.y() <= rect.top() + margin:
+            edges |= Qt.Edge.TopEdge
+        elif rect.bottom() - margin <= position.y() <= rect.bottom():
+            edges |= Qt.Edge.BottomEdge
+        return edges
+
+    @staticmethod
+    def _resize_cursor(edges):
+        if edges in (Qt.Edge.LeftEdge, Qt.Edge.RightEdge):
+            return Qt.CursorShape.SizeHorCursor
+        if edges in (Qt.Edge.TopEdge, Qt.Edge.BottomEdge):
+            return Qt.CursorShape.SizeVerCursor
+        if edges in (Qt.Edge.TopEdge | Qt.Edge.LeftEdge,
+                     Qt.Edge.BottomEdge | Qt.Edge.RightEdge):
+            return Qt.CursorShape.SizeFDiagCursor
+        if edges in (Qt.Edge.TopEdge | Qt.Edge.RightEdge,
+                     Qt.Edge.BottomEdge | Qt.Edge.LeftEdge):
+            return Qt.CursorShape.SizeBDiagCursor
+        return Qt.CursorShape.ArrowCursor
+
+    def _apply_manual_resize(self, position):
+        if not self._resize_edges or self._resize_start_geometry is None:
+            return
+
+        start = self._resize_start_geometry
+        delta = position - self._resize_start_position
+        left, top, right, bottom = start.left(), start.top(), start.right(), start.bottom()
+        edges = self._resize_edges
+
+        if edges & Qt.Edge.LeftEdge:
+            left = min(left + delta.x(), right - self.minimumWidth() + 1)
+        if edges & Qt.Edge.RightEdge:
+            right = max(right + delta.x(), left + self.minimumWidth() - 1)
+        if edges & Qt.Edge.TopEdge:
+            top = min(top + delta.y(), bottom - self.minimumHeight() + 1)
+        if edges & Qt.Edge.BottomEdge:
+            bottom = max(bottom + delta.y(), top + self.minimumHeight() - 1)
+
+        self.setGeometry(left, top, right - left + 1, bottom - top + 1)
+
+    def eventFilter(self, watched, event):
+        """Handle resize gestures even when the pointer is over child widgets."""
+        if (watched is self or self.isAncestorOf(watched)) and isinstance(event, QMouseEvent):
+            event_type = event.type()
+            if event_type in (QEvent.Type.MouseButtonPress,
+                              QEvent.Type.MouseMove,
+                              QEvent.Type.MouseButtonRelease):
+                position = event.globalPosition().toPoint()
+
+                if event_type == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                    edges = self._window_edges_at(position)
+                    if edges:
+                        self._resize_edges = edges
+                        self._resize_start_position = position
+                        self._resize_start_geometry = self.geometry()
+                        self._dragging_window = False
+                        return True
+
+                    is_title_child = watched is self.title_bar or self.title_bar.isAncestorOf(watched)
+                    is_button = isinstance(watched, QPushButton)
+                    if is_title_child and not is_button:
+                        self._dragging_window = True
+                        self._resize_start_position = position - self.frameGeometry().topLeft()
+                        return True
+
+                elif event_type == QEvent.Type.MouseMove:
+                    if self._resize_edges:
+                        self._apply_manual_resize(position)
+                        return True
+                    if self._dragging_window and event.buttons() & Qt.MouseButton.LeftButton:
+                        self.move(position - self._resize_start_position)
+                        return True
+                    if not (event.buttons() & Qt.MouseButton.LeftButton):
+                        self.setCursor(self._resize_cursor(self._window_edges_at(position)))
+
+                elif event_type == QEvent.Type.MouseButtonRelease:
+                    if self._resize_edges or self._dragging_window:
+                        self._resize_edges = Qt.Edge(0)
+                        self._resize_start_position = None
+                        self._resize_start_geometry = None
+                        self._dragging_window = False
+                        self.unsetCursor()
+                        return True
+
+        return super().eventFilter(watched, event)
     
     def apply_window_style(self):
         """应用窗口样式"""

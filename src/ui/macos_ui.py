@@ -13,6 +13,7 @@ from PyQt6.QtGui import *
 from datetime import datetime
 
 from ..core.app_config import AppConfig
+from ..core.quick_command_store import QuickCommandStore
 from ..core.resources import resource_path as get_resource_path
 from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
@@ -55,6 +56,9 @@ class MacOSSerialUI(QWidget):
         super().__init__()
         self.config = config
         self.serial_manager = serial_mgr
+        self.serial_manager.set_auto_reconnect(
+            self.config.get("serial.auto_reconnect", True)
+        )
         self.bluetooth_manager = BluetoothManager()
         
         # 当前模式：'serial' 或 'bluetooth'
@@ -74,6 +78,7 @@ class MacOSSerialUI(QWidget):
         
         # 配置文件路径
         self.config_file = "quick_commands.json"
+        self.quick_command_store = QuickCommandStore(self.config_file)
         
         # 快捷输入数据 - 从配置文件加载
         self.quick_commands = self.load_quick_commands()
@@ -1983,33 +1988,8 @@ class MacOSSerialUI(QWidget):
     
     def load_quick_commands(self):
         """从配置文件加载快捷命令"""
-        try:
-            if os.path.exists(self.config_file):
-                with open(self.config_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                # 如果配置文件不存在，返回默认配置
-                return [
-                    {"name": "重启模块", "command": "AT+RST", "description": "重启模块", "enabled": True, "delay": 1000, "is_hex": False},
-                    {"name": "查询版本信息", "command": "AT+GMR", "description": "查询版本信息", "enabled": True, "delay": 1000, "is_hex": False},
-                    {"name": "扫描WiFi热点", "command": "AT+CWLAP", "description": "扫描WiFi热点", "enabled": True, "delay": 1000, "is_hex": False},
-                    {"name": "HEX测试数据", "command": "01 02 03 04", "description": "HEX测试数据", "enabled": False, "delay": 1000, "is_hex": True},
-                    {"name": "连接WiFi网络", "command": "AT+CWJAP=\"SSID\",\"PASS\"", "description": "连接WiFi网络", "enabled": False, "delay": 1000, "is_hex": False},
-                ]
-        except Exception as e:
-            # 返回默认配置
-            return [
-                {"name": "重启模块", "command": "AT+RST", "description": "重启模块", "enabled": True, "delay": 1000, "is_hex": False},
-                {"name": "查询版本信息", "command": "AT+GMR", "description": "查询版本信息", "enabled": True, "delay": 1000, "is_hex": False},
-                {"name": "扫描WiFi热点", "command": "AT+CWLAP", "description": "扫描WiFi热点", "enabled": True, "delay": 1000, "is_hex": False},
-                {"name": "HEX测试数据", "command": "01 02 03 04", "description": "HEX测试数据", "enabled": False, "delay": 1000, "is_hex": True},
-                {"name": "连接WiFi网络", "command": "AT+CWJAP=\"SSID\",\"PASS\"", "description": "连接WiFi网络", "enabled": False, "delay": 1000, "is_hex": False},
-            ]
+        return self.quick_command_store.load()
     
     def save_quick_commands(self):
         """保存快捷命令到配置文件"""
-        try:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.quick_commands, f, ensure_ascii=False, indent=4)
-        except Exception as e:
-            pass
+        self.quick_command_store.save(self.quick_commands)
