@@ -37,18 +37,21 @@ python main.py
 
 ```
 .
-├── main.py                  # 程序入口
+├── main.py                  # 兼容启动入口
 ├── requirements.txt         # 依赖列表
 ├── quick_commands.json      # 快捷命令配置（运行时生成）
 ├── build_installer.bat      # 一键打包脚本
 ├── build.spec               # PyInstaller 配置
 ├── installer.iss            # Inno Setup 安装包配置
 └── src/
+    ├── app.py                  # 应用组装与事件循环
     ├── core/
     │   ├── app_config.py        # 应用配置
+    │   ├── resources.py         # 统一资源路径
     │   ├── serial_manager.py    # 串口管理
     │   └── bluetooth_manager.py # 蓝牙管理
     ├── ui/
+    │   ├── main_window.py       # 主窗口外壳
     │   └── macos_ui.py          # 主界面
     └── resource/                # 图标、字体等静态资源
 ```

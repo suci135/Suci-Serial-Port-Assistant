@@ -13,18 +13,14 @@ from PyQt6.QtGui import *
 from datetime import datetime
 
 from ..core.app_config import AppConfig
+from ..core.resources import resource_path as get_resource_path
 from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
 
 
 def resource_path(relative_path: str) -> str:
     """获取资源文件的绝对路径，兼容 PyInstaller 打包环境"""
-    if hasattr(sys, '_MEIPASS'):
-        base = sys._MEIPASS
-    else:
-        base = os.path.dirname(os.path.abspath(__file__))
-        base = os.path.join(base, '..', '..')
-    return os.path.normpath(os.path.join(base, relative_path))
+    return get_resource_path(relative_path)
 
 
 class MessageContainer(QWidget):
