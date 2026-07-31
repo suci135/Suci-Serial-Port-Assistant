@@ -1,50 +1,56 @@
-# Python
+# Python 字节码
 __pycache__/
 *.py[cod]
-*.pyc
-*.pyo
-*.pyd
-*.pdb
+*$py.class
 
-# 虚拟环境
-.venv/
-venv/
-env/
-ENV/
+# 项目虚拟环境
+/.venv/
+/venv/
+/env/
+/ENV/
 
-# PyInstaller 构建产物
-build/
-dist/
-*.spec.bak
-*.manifest
+# 构建与安装输出
+/build/
+/dist/
+/build_assets/
+/installer_output/
+*.egg-info/
+*.issig
 
-# 安装包输出
-installer_output/
+# 测试、覆盖率和代码检查缓存
+/.pytest_cache/
+/.mypy_cache/
+/.ruff_cache/
+/.tox/
+/.nox/
+/.coverage
+/.coverage.*
+/coverage.xml
+/htmlcov/
 
-# IDE
-.idea/
-.vscode/
+# 编辑器和本地工作区
+/.idea/
+/.vscode/
 *.swp
 *~
 
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
+# 本地环境变量（示例文件可以提交）
+.env
+.env.*
+!.env.example
 
-# Windows
-Thumbs.db
-desktop.ini
-ehthumbs.db
-
-# 日志
+# 日志和临时文件
 *.log
-logs/
-
-# 临时文件
+/logs/
 *.tmp
 *.bak
 *.orig
+/.codex-preview/
 
-# 用户数据
-quick_commands.json.bak
+# 操作系统元数据
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+ehthumbs.db

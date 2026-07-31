@@ -301,6 +301,48 @@ class SerialManager(QObject):
         except UnicodeEncodeError as e:
             self.error_occurred.emit(f"文本编码失败: {str(e)}")
             return False
+
+    @property
+    def line_states(self) -> Dict[str, bool]:
+        """Return modem input line states without exposing the serial object."""
+        if not self._is_connected or not self._serial:
+            return {'CTS': False, 'DSR': False, 'DCD': False, 'RI': False}
+        try:
+            return {
+                'CTS': bool(self._serial.cts),
+                'DSR': bool(self._serial.dsr),
+                'DCD': bool(self._serial.cd),
+                'RI': bool(self._serial.ri),
+            }
+        except (OSError, AttributeError, serial.SerialException):
+            return {'CTS': False, 'DSR': False, 'DCD': False, 'RI': False}
+
+    def set_dtr(self, enabled: bool) -> bool:
+        return self._set_output_line('dtr', enabled, 'DTR')
+
+    def set_rts(self, enabled: bool) -> bool:
+        return self._set_output_line('rts', enabled, 'RTS')
+
+    def _set_output_line(self, attribute: str, enabled: bool, label: str) -> bool:
+        if not self._is_connected or not self._serial:
+            return False
+        try:
+            setattr(self._serial, attribute, bool(enabled))
+            return True
+        except (OSError, AttributeError, ValueError, serial.SerialException) as exc:
+            self.error_occurred.emit(f"设置 {label} 失败: {exc}")
+            return False
+
+    def send_break(self, duration: float = 0.25) -> bool:
+        """Transmit a timed BREAK condition on the active serial port."""
+        if not self._is_connected or not self._serial:
+            return False
+        try:
+            self._serial.send_break(duration=max(0.0, float(duration)))
+            return True
+        except (OSError, AttributeError, ValueError, serial.SerialException) as exc:
+            self.error_occurred.emit(f"发送 BREAK 失败: {exc}")
+            return False
     
     @property
     def is_connected(self) -> bool:

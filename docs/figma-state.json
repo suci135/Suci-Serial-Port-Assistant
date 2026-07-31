@@ -1,0 +1,28 @@
+{
+  "runId": "suci-serial-2026-07-31",
+  "fileKey": "swHlN24dPGwzyXEPfiJa2q",
+  "fileUrl": "https://www.figma.com/design/swHlN24dPGwzyXEPfiJa2q",
+  "phase": "phase1",
+  "step": "primitive-colors-batch-2",
+  "status": "paused_by_starter_plan_call_limit",
+  "entities": {
+    "collections": {
+      "primitives": "VariableCollectionId:3:2",
+      "colorLight": "VariableCollectionId:3:3",
+      "colorDark": "VariableCollectionId:3:4",
+      "metrics": "VariableCollectionId:3:5"
+    },
+    "variables": {
+      "white": "VariableID:3:6",
+      "gray50": "VariableID:3:7",
+      "gray100": "VariableID:3:8",
+      "gray200": "VariableID:3:9",
+      "gray500": "VariableID:3:10",
+      "gray800": "VariableID:3:11",
+      "gray900": "VariableID:3:12",
+      "black": "VariableID:3:13"
+    }
+  },
+  "completedSteps": ["P0.a", "P0.b", "P0.c", "P0.d", "P0.e", "P0.f", "P1.a"],
+  "pendingValidations": ["P1.b remaining colors", "P1.c semantic aliases", "P1.f styles"]
+}

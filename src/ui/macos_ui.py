@@ -21,14 +21,19 @@ from ..core.resources import resource_path as get_resource_path
 from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
 from .layout_metrics import (
+    COMPOSER_MIN_HEIGHT,
     CONTENT_MARGIN,
     LEFT_SIDEBAR_WIDTH,
     RIGHT_SIDEBAR_WIDTH,
     SECTION_SPACING,
     SIDEBAR_HORIZONTAL_MARGIN,
     SIDEBAR_VERTICAL_MARGIN,
+    SPLITTER_HANDLE_WIDTH,
     TOOLBAR_SPACING,
 )
+from .responsive_layout import layout_state_for_width
+from .design import palette_for
+from .workbench import SendComposer
 
 
 def resource_path(relative_path: str) -> str:
@@ -113,74 +118,169 @@ class MacOSSerialUI(QWidget):
         self.sequence_runner.completed.connect(self._on_sequence_completed)
         
         self.init_ui()
+        self.line_status_timer = QTimer(self)
+        self.line_status_timer.setInterval(250)
+        self.line_status_timer.timeout.connect(self.update_line_states)
+        self.line_status_timer.start()
         self.apply_macos_style()
         self.connect_signals()
         self.refresh_devices()
     
     def init_ui(self):
-        """初始化 UI"""
+        """Build the adaptive workbench shell."""
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
-        # 顶部横线容器 - 确保与下方分界线对齐
-        top_line_container = QHBoxLayout()
-        top_line_container.setContentsMargins(0, 0, 0, 0)
-        top_line_container.setSpacing(0)
-        
-        # 左侧空白区域（对应左侧边栏宽度）
-        left_spacer = QWidget()
-        left_spacer.setFixedWidth(LEFT_SIDEBAR_WIDTH)
-        left_spacer.setObjectName("leftSpacer")
-        top_line_container.addWidget(left_spacer)
-        
-        # 顶部横线
-        title_separator = QFrame()
-        title_separator.setObjectName("titleBottomSeparator")
-        title_separator.setFrameShape(QFrame.Shape.HLine)
-        title_separator.setFixedHeight(1)
-        top_line_container.addWidget(title_separator, 1)
-        
-        main_layout.addLayout(top_line_container)
-        
-        # 主要内容区域
-        content_layout = QHBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(0)
 
-        # 左侧边栏
-        left_sidebar = self.create_left_sidebar()
-        content_layout.addWidget(left_sidebar)
+        self.workbench_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.workbench_splitter.setObjectName("workbenchSplitter")
+        self.workbench_splitter.setHandleWidth(SPLITTER_HANDLE_WIDTH)
+        self.workbench_splitter.setChildrenCollapsible(False)
 
-        # 左中分界线
-        left_center_separator = QFrame()
-        left_center_separator.setObjectName("leftCenterSeparator")
-        left_center_separator.setFrameShape(QFrame.Shape.VLine)
-        left_center_separator.setFixedWidth(1)
-        content_layout.addWidget(left_center_separator)
+        self.left_sidebar = self.create_left_sidebar()
+        self.center_content = self.create_center_content()
+        self.right_sidebar = self.create_right_sidebar()
+        self.workbench_splitter.addWidget(self.left_sidebar)
+        self.workbench_splitter.addWidget(self.center_content)
+        self.workbench_splitter.addWidget(self.right_sidebar)
+        self.workbench_splitter.setStretchFactor(0, 0)
+        self.workbench_splitter.setStretchFactor(1, 1)
+        self.workbench_splitter.setStretchFactor(2, 0)
+        saved_sizes = self.config.get("window.splitter_sizes", [])
+        initial_sizes = (
+            saved_sizes
+            if isinstance(saved_sizes, list) and len(saved_sizes) == 3
+            else [LEFT_SIDEBAR_WIDTH, 720, RIGHT_SIDEBAR_WIDTH]
+        )
+        self.workbench_splitter.setSizes(initial_sizes)
+        main_layout.addWidget(self.workbench_splitter)
 
-        # 中央内容区
-        center_content = self.create_center_content()
-        content_layout.addWidget(center_content, 1)
+        # Persistent edge handles replace the toolbar's text panel buttons.
+        # They remain available when either panel is collapsed.
+        self.left_edge_button = QPushButton(self)
+        self.left_edge_button.setObjectName("edgeToggleButton")
+        self.left_edge_button.setFixedSize(24, 42)
+        self.left_edge_button.setToolTip("收起连接侧栏")
+        self.left_edge_button.clicked.connect(self.toggle_navigation_panel)
 
-        # 中右分界线
-        center_right_separator = QFrame()
-        center_right_separator.setObjectName("centerRightSeparator")
-        center_right_separator.setFrameShape(QFrame.Shape.VLine)
-        center_right_separator.setFixedWidth(1)
-        content_layout.addWidget(center_right_separator)
+        self.right_edge_button = QPushButton(self)
+        self.right_edge_button.setObjectName("edgeToggleButton")
+        self.right_edge_button.setFixedSize(24, 42)
+        self.right_edge_button.setToolTip("收起参数与命令面板")
+        self.right_edge_button.clicked.connect(self.toggle_inspector_panel)
+        self.left_edge_button.raise_()
+        self.right_edge_button.raise_()
 
-        # 右侧边栏
-        right_sidebar = self.create_right_sidebar()
-        content_layout.addWidget(right_sidebar)
+        self._navigation_requested = True
+        self._inspector_requested = True
+        self._update_edge_buttons()
+        self._responsive_timer = QTimer(self)
+        self._responsive_timer.setSingleShot(True)
+        self._responsive_timer.setInterval(16)
+        self._responsive_timer.timeout.connect(self._apply_responsive_layout)
+        self._splitter_save_timer = QTimer(self)
+        self._splitter_save_timer.setSingleShot(True)
+        self._splitter_save_timer.setInterval(250)
+        self._splitter_save_timer.timeout.connect(self._save_splitter_sizes)
+        self.workbench_splitter.splitterMoved.connect(self._on_splitter_moved)
+        QTimer.singleShot(0, self._apply_responsive_layout)
 
-        main_layout.addLayout(content_layout)
+    def _save_splitter_sizes(self):
+        sizes = self.workbench_splitter.sizes()
+        if all(size > 0 for size in sizes):
+            self.config.set("window.splitter_sizes", sizes)
+            self.config.save_config()
+
+    def _on_splitter_moved(self, _position, _index):
+        """Keep edge handles attached to pane boundaries during dragging."""
+        self._position_edge_buttons()
+        self._splitter_save_timer.start()
+
+    def resizeEvent(self, event):
+        """Coalesce resize updates so dragging the window remains fluid."""
+        if hasattr(self, "_responsive_timer"):
+            self._responsive_timer.start()
+        if hasattr(self, "left_edge_button"):
+            QTimer.singleShot(0, self._position_edge_buttons)
+        super().resizeEvent(event)
+
+    def _apply_responsive_layout(self):
+        if not hasattr(self, "workbench_splitter"):
+            return
+        state = layout_state_for_width(self.width())
+        show_navigation = state.show_navigation and self._navigation_requested
+        show_inspector = state.show_inspector and self._inspector_requested
+        self.left_sidebar.setVisible(show_navigation)
+        self.right_sidebar.setVisible(show_inspector)
+        self._update_edge_buttons()
+        self.search_input.setMaximumWidth(112 if state.compact_toolbar else 180)
+        self.timestamp_check.setVisible(not state.compact_toolbar)
+        self.autoscroll_check.setVisible(not state.compact_toolbar)
+        self.export_btn.setVisible(not state.compact_toolbar)
+
+    def _position_edge_buttons(self):
+        """Place collapse handles on the current pane boundaries."""
+        if not hasattr(self, "left_edge_button"):
+            return
+        y = max(8, (self.height() - self.left_edge_button.height()) // 2)
+        left_x = (
+            self.left_sidebar.geometry().right() - self.left_edge_button.width() // 2
+            if self.left_sidebar.isVisible()
+            else 0
+        )
+        right_x = (
+            self.right_sidebar.geometry().left() - self.right_edge_button.width() // 2
+            if self.right_sidebar.isVisible()
+            else self.width() - self.right_edge_button.width()
+        )
+        self.left_edge_button.move(max(0, left_x), y)
+        self.right_edge_button.move(
+            min(self.width() - self.right_edge_button.width(), right_x), y
+        )
+        self.left_edge_button.raise_()
+        self.right_edge_button.raise_()
+
+    def _update_edge_buttons(self):
+        left_open = self.left_sidebar.isVisible()
+        right_open = self.right_sidebar.isVisible()
+        self.left_edge_button.setIcon(
+            self.style().standardIcon(
+                QStyle.StandardPixmap.SP_ArrowLeft
+                if left_open else QStyle.StandardPixmap.SP_ArrowRight
+            )
+        )
+        self.left_edge_button.setIconSize(QSize(12, 12))
+        self.left_edge_button.setToolTip("收起连接侧栏" if left_open else "展开连接侧栏")
+        self.right_edge_button.setIcon(
+            self.style().standardIcon(
+                QStyle.StandardPixmap.SP_ArrowRight
+                if right_open else QStyle.StandardPixmap.SP_ArrowLeft
+            )
+        )
+        self.right_edge_button.setIconSize(QSize(12, 12))
+        self.right_edge_button.setToolTip(
+            "收起参数与命令面板" if right_open else "展开参数与命令面板"
+        )
+        QTimer.singleShot(0, self._position_edge_buttons)
+
+    def toggle_navigation_panel(self):
+        show = not self.left_sidebar.isVisible()
+        self._navigation_requested = show
+        self.left_sidebar.setVisible(show)
+        self._update_edge_buttons()
+
+    def toggle_inspector_panel(self):
+        show = not self.right_sidebar.isVisible()
+        self._inspector_requested = show
+        self.right_sidebar.setVisible(show)
+        self._update_edge_buttons()
 
     def create_left_sidebar(self):
         """创建左侧边栏 - 串口/蓝牙连接设置"""
         sidebar = QFrame()
         sidebar.setObjectName("leftSidebar")
-        sidebar.setFixedWidth(LEFT_SIDEBAR_WIDTH)
+        sidebar.setMinimumWidth(180)
+        sidebar.setMaximumWidth(280)
         
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(
@@ -236,7 +336,7 @@ class MacOSSerialUI(QWidget):
         self.baud_combo = QComboBox()
         self.baud_combo.setEditable(True)
         self.baud_combo.addItems(["9600", "19200", "38400", "57600", "115200"])
-        self.baud_combo.setCurrentText("9600")
+        self.baud_combo.setCurrentText(str(self.config.get("serial.baud_rate", 9600)))
         serial_config_layout.addWidget(self.baud_combo)
         
         # Data Bits
@@ -245,7 +345,7 @@ class MacOSSerialUI(QWidget):
         serial_config_layout.addWidget(data_label)
         self.data_bits_combo = QComboBox()
         self.data_bits_combo.addItems(["5", "6", "7", "8"])
-        self.data_bits_combo.setCurrentText("8")
+        self.data_bits_combo.setCurrentText(str(self.config.get("serial.data_bits", 8)))
         serial_config_layout.addWidget(self.data_bits_combo)
         
         # Stop Bits
@@ -254,7 +354,7 @@ class MacOSSerialUI(QWidget):
         serial_config_layout.addWidget(stop_label)
         self.stop_bits_combo = QComboBox()
         self.stop_bits_combo.addItems(["1", "1.5", "2"])
-        self.stop_bits_combo.setCurrentText("1")
+        self.stop_bits_combo.setCurrentText(str(self.config.get("serial.stop_bits", 1)))
         serial_config_layout.addWidget(self.stop_bits_combo)
         
         # Parity
@@ -262,9 +362,26 @@ class MacOSSerialUI(QWidget):
         parity_label.setObjectName("compactLabel")
         serial_config_layout.addWidget(parity_label)
         self.parity_combo = QComboBox()
-        self.parity_combo.addItems(["None", "Even", "Odd"])
-        self.parity_combo.setCurrentText("None")
+        self.parity_combo.addItems(["None", "Even", "Odd", "Mark", "Space"])
+        self.parity_combo.setCurrentText(self.config.get("serial.parity", "None"))
         serial_config_layout.addWidget(self.parity_combo)
+
+        flow_label = QLabel("流控制")
+        flow_label.setObjectName("compactLabel")
+        serial_config_layout.addWidget(flow_label)
+        self.flow_control_combo = QComboBox()
+        self.flow_control_combo.addItems(["None", "XON/XOFF", "RTS/CTS", "DSR/DTR"])
+        self.flow_control_combo.setCurrentText(
+            self.config.get("serial.flow_control", "None")
+        )
+        serial_config_layout.addWidget(self.flow_control_combo)
+
+        self.auto_reconnect_check = QCheckBox("意外断开后自动重连")
+        self.auto_reconnect_check.setChecked(
+            self.config.get("serial.auto_reconnect", True)
+        )
+        self.auto_reconnect_check.toggled.connect(self.set_auto_reconnect)
+        serial_config_layout.addWidget(self.auto_reconnect_check)
         
         layout.addWidget(self.serial_config_widget)
         
@@ -304,8 +421,6 @@ class MacOSSerialUI(QWidget):
         # 默认隐藏蓝牙配置
         self.bluetooth_config_widget.hide()
         
-        layout.addStretch()
-        
         # 连接按钮
         self.connect_btn = QPushButton("连接")
         self.connect_btn.setObjectName("primaryButton")
@@ -329,6 +444,55 @@ class MacOSSerialUI(QWidget):
         status_layout.addStretch()
         
         layout.addWidget(status_frame)
+
+        # 串口线路监控与手动控制
+        self.line_control_card = QFrame()
+        self.line_control_card.setObjectName("lineControlCard")
+        line_card_layout = QVBoxLayout(self.line_control_card)
+        line_card_layout.setContentsMargins(10, 9, 10, 9)
+        line_card_layout.setSpacing(7)
+
+        line_title = QLabel("线路监控")
+        line_title.setObjectName("sectionTitle")
+        line_card_layout.addWidget(line_title)
+
+        self.connection_summary = QLabel("9600 · 8N1 · 无流控")
+        self.connection_summary.setObjectName("connectionSummary")
+        line_card_layout.addWidget(self.connection_summary)
+
+        state_row = QHBoxLayout()
+        state_row.setSpacing(5)
+        self.line_state_labels = {}
+        for name in ("CTS", "DSR", "DCD", "RI"):
+            label = QLabel(f"● {name}")
+            label.setObjectName("lineStateInactive")
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.line_state_labels[name] = label
+            state_row.addWidget(label, 1)
+        line_card_layout.addLayout(state_row)
+
+        control_row = QHBoxLayout()
+        control_row.setSpacing(6)
+        self.dtr_button = QPushButton("DTR")
+        self.dtr_button.setObjectName("lineControlButton")
+        self.dtr_button.setCheckable(True)
+        self.dtr_button.setToolTip("切换串口 DTR 输出线")
+        self.dtr_button.toggled.connect(self.set_dtr_line)
+        self.rts_button = QPushButton("RTS")
+        self.rts_button.setObjectName("lineControlButton")
+        self.rts_button.setCheckable(True)
+        self.rts_button.setToolTip("切换串口 RTS 输出线")
+        self.rts_button.toggled.connect(self.set_rts_line)
+        self.break_button = QPushButton("BREAK")
+        self.break_button.setObjectName("lineControlButton")
+        self.break_button.setToolTip("发送 250 ms BREAK 信号")
+        self.break_button.clicked.connect(self.send_break_signal)
+        for button in (self.dtr_button, self.rts_button, self.break_button):
+            button.setEnabled(False)
+            control_row.addWidget(button)
+        line_card_layout.addLayout(control_row)
+        layout.addWidget(self.line_control_card)
+        layout.addStretch()
         
         return sidebar
 
@@ -344,7 +508,7 @@ class MacOSSerialUI(QWidget):
         # 顶部工具栏
         toolbar = QHBoxLayout()
         toolbar.setSpacing(TOOLBAR_SPACING)
-        
+
         # 格式选择
         toolbar.addWidget(QLabel("格式:"))
         self.format_combo = QComboBox()
@@ -376,7 +540,7 @@ class MacOSSerialUI(QWidget):
         toolbar.addWidget(self.search_input)
         
         toolbar.addStretch()
-        
+
         # 清除按钮
         self.clear_btn = QPushButton("清除")
         self.clear_btn.setObjectName("secondaryButton")
@@ -425,7 +589,9 @@ class MacOSSerialUI(QWidget):
         self.scroll_area.setWidget(self.messages_widget)
         display_container_layout.addWidget(self.scroll_area)
         
-        layout.addWidget(display_container)
+        layout.addWidget(display_container, 1)
+
+        layout.addWidget(self.create_send_composer())
         
         # 底部状态栏
         status_bar = QHBoxLayout()
@@ -449,94 +615,67 @@ class MacOSSerialUI(QWidget):
         
         return content
 
+    def create_send_composer(self):
+        """Create the always-nearby send area below the terminal."""
+        composer = SendComposer(COMPOSER_MIN_HEIGHT)
+        composer.send_requested.connect(self.send_data)
+        composer.repeat_toggled.connect(self.toggle_repeat_send)
+        composer.interval_changed.connect(self.update_repeat_interval)
+
+        # Compatibility aliases keep the existing communication logic stable.
+        self.send_format_combo = composer.format_combo
+        self.send_input = composer.input
+        self.send_btn = composer.send_button
+        self.add_carriage = composer.add_carriage
+        self.add_newline = composer.add_newline
+        self.repeat_check = composer.repeat_check
+        self.repeat_interval_spin = composer.interval_spin
+        return composer
+
     def create_right_sidebar(self):
-        """创建右侧边栏 - 发送控制和快捷输入面板"""
+        """Create the context inspector for parameters and commands."""
         sidebar = QFrame()
         sidebar.setObjectName("rightSidebar")
-        sidebar.setFixedWidth(RIGHT_SIDEBAR_WIDTH)
+        sidebar.setMinimumWidth(280)
+        sidebar.setMaximumWidth(420)
         
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(12, SIDEBAR_VERTICAL_MARGIN, 12, 10)
         layout.setSpacing(SECTION_SPACING)
         
-        # 发送区域标题
-        send_title = QLabel("发送控制")
-        send_title.setObjectName("sectionTitle")
-        layout.addWidget(send_title)
-        
-        # 发送格式
-        format_layout = QHBoxLayout()
-        format_layout.addWidget(QLabel("格式:"))
-        self.send_format_combo = QComboBox()
-        self.send_format_combo.addItems(["HEX", "ASCII", "UTF-8"])
-        self.send_format_combo.setCurrentText("UTF-8")
-        format_layout.addWidget(self.send_format_combo)
-        format_layout.addStretch()
-        layout.addLayout(format_layout)
-        
-        # 输入区域
-        input_container = QFrame()
-        input_container.setObjectName("sendInputContainer")
-        input_container.setMaximumHeight(84)
-        input_container_layout = QVBoxLayout(input_container)
-        input_container_layout.setContentsMargins(0, 0, 0, 0)
-        input_container_layout.setSpacing(0)
-        
-        self.send_input = QTextEdit()
-        self.send_input.setObjectName("sendInput")
-        self.send_input.setPlaceholderText("发送数据...")
-        self.send_input.setMaximumHeight(80)
-        self.send_input.setFrameShape(QFrame.Shape.NoFrame)
-        input_container_layout.addWidget(self.send_input)
-        
-        layout.addWidget(input_container)
-        
-        # 发送选项和按钮在同一行
-        send_controls_layout = QHBoxLayout()
-        
-        # 发送选项
-        self.add_newline = QCheckBox("\\n")
-        self.add_carriage = QCheckBox("\\r")
-        self.repeat_check = QCheckBox("循环")
-        self.repeat_check.setToolTip("按设定间隔重复发送当前输入")
-        self.repeat_check.stateChanged.connect(self.toggle_repeat_send)
-        self.repeat_interval_spin = QSpinBox()
-        self.repeat_interval_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-        self.repeat_interval_spin.setRange(50, 60000)
-        self.repeat_interval_spin.setValue(1000)
-        self.repeat_interval_spin.setSuffix(" ms")
-        self.repeat_interval_spin.setMaximumWidth(78)
-        self.repeat_interval_spin.setToolTip("循环发送间隔")
-        self.repeat_interval_spin.valueChanged.connect(self.update_repeat_interval)
-        send_controls_layout.addWidget(self.add_newline)
-        send_controls_layout.addWidget(self.add_carriage)
-        send_controls_layout.addWidget(self.repeat_check)
-        send_controls_layout.addWidget(self.repeat_interval_spin)
-        send_controls_layout.addStretch()
-        
-        # 发送按钮
-        self.send_btn = QPushButton("发送")
-        self.send_btn.setObjectName("primaryButton")
-        self.send_btn.setMinimumHeight(28)
-        self.send_btn.clicked.connect(self.send_data)
-        send_controls_layout.addWidget(self.send_btn)
-        
-        layout.addLayout(send_controls_layout)
-        
-        # 分隔线
-        separator = QFrame()
-        separator.setObjectName("sectionSeparator")
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFixedHeight(1)
-        layout.addWidget(separator)
-        
-        # 快捷输入面板标题
-        quick_title = QLabel("快捷输入")
+        tabs = QTabWidget()
+        tabs.setObjectName("inspectorTabs")
+        tabs.setDocumentMode(False)
+        tabs.tabBar().setObjectName("inspectorTabBar")
+        tabs.tabBar().setDrawBase(False)
+        tabs.tabBar().setExpanding(False)
+        self.inspector_tabs = tabs
+
+        parameters_tab = QWidget()
+        parameters_tab.setObjectName("inspectorPage")
+        parameters_layout = QVBoxLayout(parameters_tab)
+        parameters_layout.setContentsMargins(4, 10, 4, 4)
+        parameters_layout.setSpacing(SECTION_SPACING)
+        parameters_title = QLabel("连接参数")
+        parameters_title.setObjectName("sectionTitle")
+        parameters_layout.addWidget(parameters_title)
+        parameters_layout.addWidget(self.serial_config_widget)
+        parameters_layout.addWidget(self.bluetooth_config_widget)
+        parameters_layout.addStretch()
+        tabs.addTab(parameters_tab, "参数")
+
+        commands_tab = QWidget()
+        commands_tab.setObjectName("inspectorPage")
+        commands_layout = QVBoxLayout(commands_tab)
+        commands_layout.setContentsMargins(4, 10, 4, 4)
+        commands_layout.setSpacing(SECTION_SPACING)
+        quick_title = QLabel("快捷命令")
         quick_title.setObjectName("sectionTitle")
-        layout.addWidget(quick_title)
-        
-        # 快捷输入面板
-        self.create_quick_input_panel(layout)
+        commands_layout.addWidget(quick_title)
+        self.create_quick_input_panel(commands_layout)
+        tabs.addTab(commands_tab, "命令")
+
+        layout.addWidget(tabs, 1)
         
         # 底部按钮区域
         bottom_buttons = QHBoxLayout()
@@ -590,7 +729,7 @@ class MacOSSerialUI(QWidget):
         
         action_label = QLabel("操作")
         action_label.setObjectName("headerLabel")
-        action_label.setFixedWidth(82)
+        action_label.setFixedWidth(94)
         action_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         header_layout.addWidget(action_label)
         
@@ -614,10 +753,9 @@ class MacOSSerialUI(QWidget):
         
         # 创建命令行
         self.command_rows = []
+        self.commands_layout.addStretch()
         for i, cmd in enumerate(self.quick_commands):
             self.create_command_row(cmd, i)
-        
-        self.commands_layout.addStretch()
         scroll_area.setWidget(commands_widget)
         parent_layout.addWidget(scroll_area)
         
@@ -672,21 +810,24 @@ class MacOSSerialUI(QWidget):
         
         # 操作按钮
         action_layout = QHBoxLayout()
+        action_layout.setContentsMargins(0, 0, 0, 0)
         action_layout.setSpacing(4)
         
         send_btn = QPushButton("发送")
         send_btn.setObjectName("quickSendButton")
+        send_btn.setFixedSize(42, 28)
         send_btn.clicked.connect(lambda checked, idx=index: self.send_quick_command(idx))
         action_layout.addWidget(send_btn)
         
         delete_btn = QPushButton("删除")
         delete_btn.setObjectName("deleteButton")
+        delete_btn.setFixedSize(42, 28)
         delete_btn.clicked.connect(lambda checked, idx=index: self.delete_command(idx))
         action_layout.addWidget(delete_btn)
         
         action_widget = QWidget()
         action_widget.setLayout(action_layout)
-        action_widget.setFixedWidth(82)
+        action_widget.setFixedWidth(94)
         row_layout.addWidget(action_widget)
         
         # 保存行数据
@@ -698,7 +839,11 @@ class MacOSSerialUI(QWidget):
             'delete_btn': delete_btn
         }
         self.command_rows.append(row_data)
-        self.commands_layout.addWidget(row_frame)
+        # Keep the expanding spacer at the end. Rebuilding after a deletion must
+        # never place rows below it, otherwise a blank block appears at the top.
+        self.commands_layout.insertWidget(
+            max(0, self.commands_layout.count() - 1), row_frame
+        )
     
     def on_command_changed(self, index, text):
         """命令内容改变"""
@@ -827,25 +972,25 @@ class MacOSSerialUI(QWidget):
         else:
             font_family = "Microsoft YaHei"
         
-        # 根据模式选择颜色
-        if self.is_dark_mode:
-            # 黑夜模式颜色
-            bg_color = "#1e1e1e"
-            sidebar_bg = "#2d2d2d"
-            text_color = "#ffffff"
-            border_color = "#404040"
-            display_bg = "#2a2a2a"  # 修复黑夜模式下数据显示背景
-            display_text = "#ffffff"
-            button_bg = "#404040"
-        else:
-            # 日间模式颜色
-            bg_color = "#ffffff"
-            sidebar_bg = "#f5f5f7"
-            text_color = "#1d1d1f"
-            border_color = "#d2d2d7"
-            display_bg = "#f8f8f8"  # 日间模式数据显示背景
-            display_text = "#1d1d1f"  # 日间模式文字颜色
-            button_bg = "#f5f5f7"
+        palette = palette_for(self.is_dark_mode)
+        bg_color = palette.surface
+        sidebar_bg = palette.sidebar
+        content_bg = palette.content
+        input_bg = palette.input
+        text_color = palette.text
+        secondary_text = palette.secondary_text
+        tertiary_text = palette.tertiary_text
+        border_color = palette.border
+        display_bg = palette.surface
+        display_text = palette.text
+        button_bg = palette.button
+        button_hover = palette.button_hover
+        selection_bg = palette.selection
+        accent = palette.accent
+        accent_hover = palette.accent_hover
+        accent_pressed = palette.accent_pressed
+        danger = palette.danger
+        danger_hover = palette.danger_hover
         
         self.setStyleSheet(f"""
             QWidget {{
@@ -879,7 +1024,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             #centerContent {{
-                background-color: {bg_color};
+                background-color: {content_bg};
             }}
             
             #sidebarTitle {{
@@ -891,12 +1036,12 @@ class MacOSSerialUI(QWidget):
             #fieldLabel {{
                 font-size: 11px;
                 font-weight: 500;
-                color: {"#aaaaaa" if self.is_dark_mode else "#86868b"};
+                color: {secondary_text};
                 text-transform: uppercase;
             }}
             
             QComboBox {{
-                background-color: {bg_color};
+                background-color: {input_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: 6px;
@@ -906,11 +1051,11 @@ class MacOSSerialUI(QWidget):
             }}
             
             QComboBox:hover {{
-                border-color: #0071e3;
+                border-color: {accent};
             }}
 
             QLineEdit, QSpinBox {{
-                background-color: {bg_color};
+                background-color: {input_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: 6px;
@@ -919,7 +1064,7 @@ class MacOSSerialUI(QWidget):
             }}
 
             QLineEdit:focus, QSpinBox:focus {{
-                border-color: #0071e3;
+                border-color: {accent};
             }}
             
             QComboBox::drop-down {{
@@ -936,16 +1081,16 @@ class MacOSSerialUI(QWidget):
             }}
             
             QComboBox QAbstractItemView {{
-                background-color: {bg_color};
+                background-color: {palette.elevated};
                 color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: 6px;
-                selection-background-color: #0071e3;
+                selection-background-color: {accent};
                 selection-color: white;
             }}
             
             #primaryButton {{
-                background-color: #0071e3;
+                background-color: {accent};
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -954,11 +1099,11 @@ class MacOSSerialUI(QWidget):
             }}
             
             #primaryButton:hover {{
-                background-color: #0077ed;
+                background-color: {accent_hover};
             }}
             
             #primaryButton:pressed {{
-                background-color: #006edb;
+                background-color: {accent_pressed};
             }}
             
             #primaryButton:disabled {{
@@ -975,22 +1120,22 @@ class MacOSSerialUI(QWidget):
             }}
             
             #secondaryButton:hover {{
-                background-color: {"#505050" if self.is_dark_mode else "#e8e8ed"};
+                background-color: {button_hover};
             }}
             
             #statusFrame {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 6px;
+                background-color: {palette.elevated};
+                border: none;
+                border-radius: 8px;
             }}
             
             #statusDot {{
-                color: {"#aaaaaa" if self.is_dark_mode else "#86868b"};
+                color: {palette.inactive};
                 font-size: 16px;
             }}
             
             #statusText {{
-                color: {"#aaaaaa" if self.is_dark_mode else "#86868b"};
+                color: {secondary_text};
                 font-size: 12px;
             }}
             
@@ -1011,13 +1156,13 @@ class MacOSSerialUI(QWidget):
             }}
             
             #chatScrollArea QScrollBar:vertical {{
-                background-color: {sidebar_bg};
+                background-color: transparent;
                 width: 8px;
                 border-radius: 4px;
             }}
             
             #chatScrollArea QScrollBar::handle:vertical {{
-                background-color: {border_color};
+                background-color: {palette.scroll_handle};
                 border-radius: 4px;
                 min-height: 20px;
             }}
@@ -1042,14 +1187,16 @@ class MacOSSerialUI(QWidget):
             }}
             
             #sendInput {{
-                background-color: {bg_color};
+                background-color: {input_bg};
                 color: {text_color};
-                border: none;
-                padding: 6px;
+                border: 1px solid {border_color};
+                border-radius: 9px;
+                padding: 8px 10px;
             }}
             
             #sendInput:focus {{
-                border: none;
+                border: 1px solid {accent};
+                background-color: {palette.elevated};
             }}
             
             #historyList {{
@@ -1065,11 +1212,11 @@ class MacOSSerialUI(QWidget):
             }}
             
             #historyList::item:hover {{
-                background-color: #f5f5f7;
+                background-color: {button_hover};
             }}
             
             #historyList::item:selected {{
-                background-color: #0071e3;
+                background-color: {accent};
                 color: white;
             }}
             
@@ -1082,12 +1229,12 @@ class MacOSSerialUI(QWidget):
                 height: 16px;
                 border: 1px solid {border_color};
                 border-radius: 4px;
-                background-color: {bg_color};
+                background-color: {input_bg};
             }}
             
             QCheckBox::indicator:checked {{
-                background-color: #0071e3;
-                border-color: #0071e3;
+                background-color: {accent};
+                border-color: {accent};
                 image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTIiIHZpZXdCb3g9IjAgMCAxMiAxMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEwIDNMNC41IDguNUwyIDYiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+Cjwvc3ZnPgo=);
             }}
             
@@ -1097,7 +1244,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             #statsLabel {{
-                color: #86868b;
+                color: {secondary_text};
                 font-size: 12px;
             }}
             
@@ -1125,30 +1272,30 @@ class MacOSSerialUI(QWidget):
             }}
             
             #headerLabel {{
-                color: #86868b;
+                color: {secondary_text};
                 font-size: 10px;
                 font-weight: 600;
                 text-transform: uppercase;
             }}
             
             #quickInputScrollArea {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
+                background-color: transparent;
+                border: none;
                 border-radius: 8px;
             }}
             
             #quickInputCommands {{
-                background-color: {bg_color};
+                background-color: transparent;
             }}
             
             #quickInputScrollArea QScrollBar:vertical {{
-                background-color: {sidebar_bg};
+                background-color: transparent;
                 width: 8px;
                 border-radius: 4px;
             }}
             
             #quickInputScrollArea QScrollBar::handle:vertical {{
-                background-color: {border_color};
+                background-color: {palette.scroll_handle};
                 border-radius: 4px;
                 min-height: 20px;
             }}
@@ -1158,24 +1305,24 @@ class MacOSSerialUI(QWidget):
             }}
             
             #commandRow {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 6px;
-                margin: 1px;
+                background-color: {palette.elevated};
+                border: 1px solid {palette.separator};
+                border-radius: 9px;
+                margin: 2px 0px;
             }}
             
             #commandRow:hover {{
-                background-color: {"#2a2a2a" if self.is_dark_mode else "#f8f8f8"};
+                background-color: {selection_bg};
+                border-color: {accent};
             }}
             
             #commandContentContainer {{
-                background-color: {bg_color};
-                border: 1px solid {border_color};
-                border-radius: 4px;
+                background-color: transparent;
+                border: none;
             }}
             
             #commandEdit {{
-                background-color: {bg_color};
+                background-color: transparent;
                 color: {text_color};
                 border: none;
                 padding: 2px 4px;
@@ -1183,8 +1330,8 @@ class MacOSSerialUI(QWidget):
             }}
             
             #commandDescriptionEdit {{
-                background-color: {bg_color};
-                color: #86868b;
+                background-color: transparent;
+                color: {secondary_text};
                 border: none;
                 padding: 2px 4px;
                 font-size: 9px;
@@ -1196,22 +1343,21 @@ class MacOSSerialUI(QWidget):
             }}
             
             #quickSendButton {{
-                background-color: #0071e3;
+                background-color: {accent};
                 color: white;
                 border: none;
                 border-radius: 4px;
-                padding: 4px 8px;  # 减少左右padding
+                padding: 0px;
                 font-size: 10px;
                 font-weight: 500;
-                min-width: 35px;  # 减少最小宽度
             }}
             
             #quickSendButton:hover {{
-                background-color: #0077ed;
+                background-color: {accent_hover};
             }}
             
             #quickSendButton:pressed {{
-                background-color: #006edb;
+                background-color: {accent_pressed};
             }}
             
             #quickSendButton:disabled {{
@@ -1220,22 +1366,22 @@ class MacOSSerialUI(QWidget):
             }}
             
             #deleteButton {{
-                background-color: #ff3b30;
-                color: white;
-                border: none;
+                background-color: transparent;
+                color: {danger};
+                border: 1px solid {danger};
                 border-radius: 4px;
-                padding: 4px 8px;  # 减少左右padding
+                padding: 0px;
                 font-size: 10px;
                 font-weight: 500;
-                min-width: 35px;  # 减少最小宽度
             }}
             
             #deleteButton:hover {{
-                background-color: #ff453a;
+                background-color: {danger};
+                color: white;
             }}
             
             #deleteButton:pressed {{
-                background-color: #d70015;
+                background-color: {danger_hover};
             }}
             
             #addCommandButton {{
@@ -1249,11 +1395,11 @@ class MacOSSerialUI(QWidget):
             }}
             
             #addCommandButton:hover {{
-                background-color: {"#404040" if self.is_dark_mode else "#e8e8ed"};
+                background-color: {button_hover};
             }}
             
             #addCommandButton:pressed {{
-                background-color: {"#505050" if self.is_dark_mode else "#d8d8dd"};
+                background-color: {palette.separator};
             }}
             
             /* 分区样式 */
@@ -1270,6 +1416,142 @@ class MacOSSerialUI(QWidget):
                 margin: 8px 0px;
             }}
             
+            QSplitter#workbenchSplitter::handle {{
+                background-color: transparent;
+                border: none;
+                image: none;
+                margin: 12px 3px;
+                border-radius: 1px;
+            }}
+
+            QSplitter#workbenchSplitter::handle:hover {{
+                background-color: {palette.separator};
+            }}
+
+            QPushButton#edgeToggleButton {{
+                background-color: {palette.elevated};
+                color: {secondary_text};
+                border: 1px solid {palette.separator};
+                border-radius: 10px;
+                padding: 0px;
+                font-size: 19px;
+                font-weight: 500;
+            }}
+
+            QPushButton#edgeToggleButton:hover {{
+                background-color: {selection_bg};
+                color: {accent};
+                border-color: {accent};
+            }}
+
+            QPushButton#edgeToggleButton:pressed {{
+                background-color: {button_hover};
+            }}
+
+            #sendComposer {{
+                background-color: {palette.elevated};
+                border: 1px solid {palette.separator};
+                border-radius: 12px;
+            }}
+
+            #toolbarButton {{
+                background-color: {button_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 7px;
+                padding: 5px 9px;
+            }}
+
+            #toolbarButton:hover {{
+                background-color: {button_hover};
+            }}
+
+            #toolbarButton:checked {{
+                background-color: {accent};
+                color: white;
+                border-color: {accent};
+            }}
+
+            QTabWidget#inspectorTabs::pane {{
+                border: none;
+                background: transparent;
+            }}
+
+            QWidget#inspectorPage {{
+                background-color: {sidebar_bg};
+            }}
+
+            QTabBar#inspectorTabBar {{
+                background: transparent;
+                border: none;
+            }}
+
+            QTabBar#inspectorTabBar::tab {{
+                background: transparent;
+                color: {secondary_text};
+                border: none;
+                padding: 7px 14px;
+                margin-right: 2px;
+            }}
+
+            QTabBar#inspectorTabBar::tab:selected {{
+                color: {accent};
+                background-color: {selection_bg};
+                border-radius: 7px;
+            }}
+
+            #lineControlCard {{
+                background-color: {palette.elevated};
+                border: 1px solid {palette.separator};
+                border-radius: 10px;
+            }}
+
+            #connectionSummary {{
+                color: {secondary_text};
+                font-size: 10px;
+                font-weight: 500;
+            }}
+
+            #lineStateInactive, #lineStateActive {{
+                border-radius: 6px;
+                padding: 4px 2px;
+                font-size: 9px;
+            }}
+
+            #lineStateInactive {{
+                color: {tertiary_text};
+                background-color: {button_bg};
+            }}
+
+            #lineStateActive {{
+                color: {palette.success};
+                background-color: {selection_bg};
+            }}
+
+            QPushButton#lineControlButton {{
+                background-color: {button_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 7px;
+                padding: 5px 4px;
+            }}
+
+            QPushButton#lineControlButton:hover {{
+                background-color: {button_hover};
+            }}
+
+            QPushButton#lineControlButton:checked {{
+                background-color: {accent};
+                border-color: {accent};
+                color: white;
+            }}
+
+            QPushButton#lineControlButton:disabled {{
+                color: {tertiary_text};
+                background-color: {button_bg};
+                border-color: {palette.separator};
+            }}
+
             /* 紧凑标签样式 */
             #compactLabel {{
                 color: {text_color};
@@ -1280,7 +1562,7 @@ class MacOSSerialUI(QWidget):
             
             /* 信息标签样式 */
             #infoLabel {{
-                color: #86868b;
+                color: {secondary_text};
                 font-size: 9px;
                 font-weight: normal;
                 margin: 2px 0px;
@@ -1297,16 +1579,16 @@ class MacOSSerialUI(QWidget):
             }}
             
             #refreshButton:hover {{
-                background-color: {"#404040" if self.is_dark_mode else "#e8e8ed"};
+                background-color: {button_hover};
             }}
             
             #refreshButton:pressed {{
-                background-color: {"#505050" if self.is_dark_mode else "#d8d8dd"};
+                background-color: {palette.separator};
             }}
             
             /* SpinBox 样式 */
             QSpinBox {{
-                background-color: {bg_color};
+                background-color: {input_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: 6px;
@@ -1315,7 +1597,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             QSpinBox:hover {{
-                border-color: #0071e3;
+                border-color: {accent};
             }}
             
             QSpinBox::up-button, QSpinBox::down-button,
@@ -1333,6 +1615,46 @@ class MacOSSerialUI(QWidget):
                 height: 0px;
             }}
         """)
+
+    def update_connection_summary(self):
+        """Refresh the compact serial format summary shown in the sidebar."""
+        if self.current_mode != 'serial':
+            return
+        parity = {
+            "None": "N", "Even": "E", "Odd": "O", "Mark": "M", "Space": "S"
+        }.get(self.parity_combo.currentText(), "N")
+        flow = self.flow_control_combo.currentText()
+        flow_text = "无流控" if flow == "None" else flow
+        self.connection_summary.setText(
+            f"{self.baud_combo.currentText()} · "
+            f"{self.data_bits_combo.currentText()}{parity}{self.stop_bits_combo.currentText()}"
+            f" · {flow_text}"
+        )
+
+    def update_line_states(self):
+        """Poll modem lines at a low rate and update only their visual state."""
+        connected = self.current_mode == 'serial' and self.serial_manager.is_connected
+        states = self.serial_manager.line_states if connected else {}
+        for name, label in self.line_state_labels.items():
+            active = bool(states.get(name, False))
+            label.setProperty("active", active)
+            label.setObjectName("lineStateActive" if active else "lineStateInactive")
+            label.style().unpolish(label)
+            label.style().polish(label)
+        for button in (self.dtr_button, self.rts_button, self.break_button):
+            button.setEnabled(connected)
+
+    def set_dtr_line(self, enabled: bool):
+        if self.serial_manager.is_connected and not self.serial_manager.set_dtr(enabled):
+            self.dtr_button.setChecked(not enabled)
+
+    def set_rts_line(self, enabled: bool):
+        if self.serial_manager.is_connected and not self.serial_manager.set_rts(enabled):
+            self.rts_button.setChecked(not enabled)
+
+    def send_break_signal(self):
+        if self.serial_manager.is_connected:
+            self.serial_manager.send_break(0.25)
     
     def on_mode_changed(self, mode_text: str):
         """模式切换"""
@@ -1345,11 +1667,13 @@ class MacOSSerialUI(QWidget):
             self.serial_config_widget.show()
             self.bluetooth_config_widget.hide()
             self.refresh_btn.setToolTip("刷新串口列表")
+            self.line_control_card.show()
         else:  # 蓝牙
             self.current_mode = 'bluetooth'
             self.serial_config_widget.hide()
             self.bluetooth_config_widget.show()
             self.refresh_btn.setToolTip("扫描蓝牙设备")
+            self.line_control_card.hide()
             
             # 检查蓝牙是否可用
             if not BluetoothManager.is_available():
@@ -1368,6 +1692,7 @@ class MacOSSerialUI(QWidget):
                     self.pybluez_config_widget.show()
         
         self.refresh_devices()
+        self.update_connection_summary()
     
     def is_any_connected(self) -> bool:
         """检查是否有任何连接"""
@@ -1441,6 +1766,8 @@ class MacOSSerialUI(QWidget):
         self.data_bits_combo.currentTextChanged.connect(self.on_serial_config_changed)
         self.stop_bits_combo.currentTextChanged.connect(self.on_serial_config_changed)
         self.parity_combo.currentTextChanged.connect(self.on_serial_config_changed)
+        self.flow_control_combo.currentTextChanged.connect(self.on_serial_config_changed)
+        self.port_combo.currentTextChanged.connect(self.update_connection_summary)
     
     def refresh_ports(self):
         """刷新串口列表"""
@@ -1451,20 +1778,29 @@ class MacOSSerialUI(QWidget):
     
     def on_serial_config_changed(self):
         """串口配置变更 - 实时应用到已连接的串口"""
-        if self.current_mode == 'serial' and self.serial_manager.is_connected:
-            try:
-                # 获取当前配置
-                config = {
-                    'baud_rate': int(self.baud_combo.currentText()),
-                    'data_bits': int(self.data_bits_combo.currentText()),
-                    'stop_bits': float(self.stop_bits_combo.currentText()),
-                    'parity': self.parity_combo.currentText()
-                }
-                # 应用配置
+        try:
+            config = {
+                'baud_rate': int(self.baud_combo.currentText()),
+                'data_bits': int(self.data_bits_combo.currentText()),
+                'stop_bits': float(self.stop_bits_combo.currentText()),
+                'parity': self.parity_combo.currentText(),
+                'flow_control': self.flow_control_combo.currentText(),
+            }
+            for key, value in config.items():
+                self.config.set(f"serial.{key}", value)
+            self.config.save_config()
+            if self.current_mode == 'serial' and self.serial_manager.is_connected:
                 self.serial_manager.configure(config)
-            except ValueError:
-                # 忽略无效的输入值
-                pass
+            self.update_connection_summary()
+        except ValueError:
+            # Editable baud input can be temporarily incomplete while typing.
+            pass
+
+    def set_auto_reconnect(self, enabled):
+        enabled = bool(enabled)
+        self.serial_manager.set_auto_reconnect(enabled)
+        self.config.set("serial.auto_reconnect", enabled)
+        self.config.save_config()
     
     def toggle_connection(self):
         """切换连接状态"""
@@ -1483,7 +1819,8 @@ class MacOSSerialUI(QWidget):
                     'baud_rate': int(self.baud_combo.currentText()),
                     'data_bits': int(self.data_bits_combo.currentText()),
                     'stop_bits': float(self.stop_bits_combo.currentText()),
-                    'parity': self.parity_combo.currentText()
+                    'parity': self.parity_combo.currentText(),
+                    'flow_control': self.flow_control_combo.currentText(),
                 }
                 self.serial_manager.configure(config)
                 
@@ -1974,7 +2311,9 @@ class MacOSSerialUI(QWidget):
             # 开始连接动画
             self.connecting_dots = 0
             self.status_label.setText(status)
-            self.status_indicator.setStyleSheet("color: #ff9500;")  # 橙色
+            self.status_indicator.setStyleSheet(
+                f"color: {palette_for(self.is_dark_mode).warning};"
+            )
             self.connecting_timer.start(500)  # 每500ms更新一次
             
             # 禁用连接按钮
@@ -1995,7 +2334,9 @@ class MacOSSerialUI(QWidget):
         self.connecting_timer.stop()  # 停止连接动画
         self.connect_btn.setText("断开")
         self.connect_btn.setEnabled(True)
-        self.status_indicator.setStyleSheet("color: #34c759;")  # 绿色
+        self.status_indicator.setStyleSheet(
+            f"color: {palette_for(self.is_dark_mode).success};"
+        )
         
         if self.current_mode == 'serial':
             self.status_label.setText("串口已连接")
@@ -2017,13 +2358,16 @@ class MacOSSerialUI(QWidget):
         
         # 启用发送控件
         self.send_btn.setEnabled(True)
+        self.update_line_states()
     
     def on_device_disconnected(self):
         """设备已断开"""
         self.connecting_timer.stop()  # 停止连接动画
         self.connect_btn.setText("连接")
         self.connect_btn.setEnabled(True)
-        self.status_indicator.setStyleSheet("color: #86868b;")  # 灰色
+        self.status_indicator.setStyleSheet(
+            f"color: {palette_for(self.is_dark_mode).inactive};"
+        )
         self.status_label.setText("未连接")
         
         if self.current_mode == 'serial':
@@ -2044,6 +2388,11 @@ class MacOSSerialUI(QWidget):
         
         # 禁用发送控件
         self.send_btn.setEnabled(False)
+        with QSignalBlocker(self.dtr_button):
+            self.dtr_button.setChecked(False)
+        with QSignalBlocker(self.rts_button):
+            self.rts_button.setChecked(False)
+        self.update_line_states()
     
     def on_error(self, error_msg: str):
         """错误处理"""
@@ -2069,6 +2418,14 @@ class MacOSSerialUI(QWidget):
         """切换黑夜模式"""
         self.is_dark_mode = not self.is_dark_mode
         self.apply_macos_style()  # 重新应用样式
+        if self.serial_manager.is_connected:
+            self.status_indicator.setStyleSheet(
+                f"color: {palette_for(self.is_dark_mode).success};"
+            )
+        else:
+            self.status_indicator.setStyleSheet(
+                f"color: {palette_for(self.is_dark_mode).inactive};"
+            )
         
         # 通知主窗口更新样式
         main_window = self.parent()

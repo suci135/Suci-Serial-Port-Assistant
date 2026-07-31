@@ -62,7 +62,7 @@ class AppConfig:
                 "width": 1200,
                 "height": 800,
                 "maximized": False,
-                "splitter_sizes": [300, 600, 300]
+                "splitter_sizes": [210, 720, 320]
             },
             "theme": {
                 "style": "light",  # light, dark, auto

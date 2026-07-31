@@ -17,7 +17,7 @@ import qasync
 from src.ui.macos_ui import MacOSSerialUI
 from src.core.app_config import AppConfig
 from src.core.serial_manager import SerialManager
-from src.ui.layout_metrics import LEFT_SIDEBAR_WIDTH, RIGHT_SIDEBAR_WIDTH
+from src.ui.design import palette_for
 
 
 def resource_path(relative_path: str) -> str:
@@ -43,8 +43,8 @@ class MainWindow(QMainWindow):
         
         # 设置窗口
         self.setWindowTitle("Suci的串口/蓝牙助手")
-        self.setMinimumSize(900, 600)
-        self.resize(1100, 700)
+        self.setMinimumSize(760, 520)
+        self.resize(1180, 760)
         
         # 设置窗口图标
         from PyQt6.QtGui import QIcon
@@ -89,8 +89,8 @@ class MainWindow(QMainWindow):
         
         # 创建动画对象
         self.resize_animation = QPropertyAnimation(self, b"geometry")
-        self.resize_animation.setDuration(420)
-        self.resize_animation.setEasingCurve(QEasingCurve.Type.InOutQuart)
+        self.resize_animation.setDuration(240)
+        self.resize_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def showEvent(self, event):
         if not self._event_filter_installed:
@@ -197,31 +197,23 @@ class MainWindow(QMainWindow):
     
     def apply_window_style(self):
         """应用窗口样式"""
-        self.setStyleSheet("""
-            #mainContainer {
-                background: #F5F5F7;
-                border: 1px solid #d2d2d7;
+        palette = palette_for(False)
+        self.setStyleSheet(f"""
+            #mainContainer {{
+                background: {palette.window};
+                border: 1px solid {palette.border};
                 border-radius: 10px;
-            }
+            }}
         """)
     
     def update_theme(self, is_dark_mode):
         """更新主题"""
-        if is_dark_mode:
-            # 黑夜模式
-            bg_color = "#1e1e1e"
-            border_color = "#404040"
-            title_bg = "#2d2d2d"
-        else:
-            # 日间模式
-            bg_color = "#F5F5F7"
-            border_color = "#d2d2d7"
-            title_bg = "#F5F5F7"
+        palette = palette_for(is_dark_mode)
         
         self.setStyleSheet(f"""
             #mainContainer {{
-                background: {bg_color};
-                border: 1px solid {border_color};
+                background: {palette.window};
+                border: 1px solid {palette.border};
                 border-radius: 10px;
             }}
         """)
@@ -229,7 +221,7 @@ class MainWindow(QMainWindow):
         # 更新标题栏样式
         self.title_bar.setStyleSheet(f"""
             #titleBar {{
-                background-color: {title_bg};
+                background-color: {palette.sidebar};
                 border-top-left-radius: 10px;
                 border-top-right-radius: 10px;
             }}
@@ -252,22 +244,18 @@ class MainWindow(QMainWindow):
                 background-color: #61C554;
             }}
             #titleLabel {{
-                color: {"#ffffff" if is_dark_mode else "#1d1d1f"};
+                color: {palette.text};
                 font-weight: 500;
-            }}
-            #titleSeparator {{
-                background-color: {border_color};
-                border: none;
             }}
         """)
     
     def create_title_bar(self):
         """创建自定义标题栏"""
-        from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel, QFrame
+        from PyQt6.QtWidgets import QWidget, QHBoxLayout, QPushButton, QLabel
         
         title_bar = QWidget()
         title_bar.setObjectName("titleBar")
-        title_bar.setFixedHeight(40)
+        title_bar.setFixedHeight(44)
         title_bar.setStyleSheet("""
             #titleBar {
                 background-color: #F5F5F7;
@@ -296,10 +284,6 @@ class MainWindow(QMainWindow):
                 color: #1d1d1f;
                 font-weight: 500;
             }
-            #titleSeparator {
-                background-color: #d2d2d7;
-                border: none;
-            }
         """)
         
         layout = QHBoxLayout(title_bar)
@@ -308,7 +292,7 @@ class MainWindow(QMainWindow):
         
         # 左侧按钮组容器
         left_buttons = QWidget()
-        left_buttons.setFixedWidth(LEFT_SIDEBAR_WIDTH)
+        left_buttons.setFixedWidth(86)
         left_layout = QHBoxLayout(left_buttons)
         left_layout.setContentsMargins(12, 0, 12, 0)
         left_layout.setSpacing(8)
@@ -341,13 +325,6 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(left_buttons)
         
-        # 第一条分隔线
-        separator1 = QFrame()
-        separator1.setObjectName("titleSeparator")
-        separator1.setFrameShape(QFrame.Shape.VLine)
-        separator1.setFixedWidth(1)
-        layout.addWidget(separator1)
-        
         # 中间标题
         layout.addStretch()
         title_label = QLabel("Suci的串口/蓝牙助手")
@@ -355,41 +332,10 @@ class MainWindow(QMainWindow):
         layout.addWidget(title_label)
         layout.addStretch()
         
-        # 右侧按钮组容器
-        right_buttons = QWidget()
-        right_buttons.setFixedWidth(RIGHT_SIDEBAR_WIDTH)
-        right_layout = QHBoxLayout(right_buttons)
-        right_layout.setContentsMargins(12, 0, 12, 0)
-        right_layout.setSpacing(8)
-
-        right_layout.addStretch()
-
-        close_btn_r = QPushButton()
-        close_btn_r.setObjectName("closeBtn")
-        close_btn_r.setProperty("class", "macButton")
-        close_btn_r.setFixedSize(12, 12)
-        close_btn_r.clicked.connect(self.close)
-        close_btn_r.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        minimize_btn_r = QPushButton()
-        minimize_btn_r.setObjectName("minimizeBtn")
-        minimize_btn_r.setProperty("class", "macButton")
-        minimize_btn_r.setFixedSize(12, 12)
-        minimize_btn_r.clicked.connect(self.showMinimized)
-        minimize_btn_r.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        maximize_btn_r = QPushButton()
-        maximize_btn_r.setObjectName("maximizeBtn")
-        maximize_btn_r.setProperty("class", "macButton")
-        maximize_btn_r.setFixedSize(12, 12)
-        maximize_btn_r.clicked.connect(self.toggle_maximize)
-        maximize_btn_r.setCursor(Qt.CursorShape.PointingHandCursor)
-
-        right_layout.addWidget(maximize_btn_r)
-        right_layout.addWidget(minimize_btn_r)
-        right_layout.addWidget(close_btn_r)
-
-        layout.addWidget(right_buttons)
+        # Keep the title optically centered without duplicating window controls.
+        right_spacer = QWidget()
+        right_spacer.setFixedWidth(86)
+        layout.addWidget(right_spacer)
         
         return title_bar
     

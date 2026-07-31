@@ -16,6 +16,8 @@
 - 支持循环发送和可扩展的数据帧解析
 - 实时收发字节统计
 
+完整功能规划与分期进度见 [功能全集与实施路线图](docs/FEATURE_ROADMAP.md)，新版工作台的布局与响应式规则见 [Apple 风格工作台重构规范](docs/UI_REDESIGN.md)。
+
 ## 下载安装
 
 前往 [Releases](../../releases) 页面下载最新安装包（Windows）。
@@ -34,6 +36,8 @@ python main.py
 1. 安装 [Inno Setup](https://jrsoftware.org/isdl.php)
 2. 运行 `build_installer.bat`
 3. 安装包生成在 `installer_output\` 目录
+
+打包脚本会自动生成浅色/深色安装向导视觉资源，并在常见安装路径中查找 Inno Setup。发布新版本时只需修改 `build_installer.bat` 顶部的 `APP_VERSION`。
 
 ## 项目结构
 
@@ -57,7 +61,10 @@ python main.py
     │   └── bluetooth_manager.py # 蓝牙管理
     ├── ui/
     │   ├── main_window.py       # 主窗口外壳
-    │   └── macos_ui.py          # 主界面
+    │   ├── macos_ui.py          # 主界面
+    │   ├── layout_metrics.py    # 布局尺寸令牌
+    │   ├── responsive_layout.py # 纯响应式布局策略
+    │   └── workbench/           # 可复用工作台组件
     └── resource/                # 图标、字体等静态资源
 ```
 
