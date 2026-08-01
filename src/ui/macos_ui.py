@@ -36,7 +36,12 @@ from .layout_metrics import (
 )
 from .responsive_layout import layout_state_for_width
 from .design import glass_palette, palette_for, with_alpha
-from .workbench import AsciiTableWidget, RadixConverterWidget, SendComposer
+from .workbench import (
+    AsciiTableWidget,
+    RadixConverterWidget,
+    SendComposer,
+    SessionOverviewCard,
+)
 
 
 def resource_path(relative_path: str) -> str:
@@ -95,6 +100,7 @@ class MacOSSerialUI(QWidget):
         self._rate_received_bytes = 0
         self._send_rate = 0.0
         self._receive_rate = 0.0
+        self._session_started_at = None
 
         # 消息记录（用于导出）
         self.message_log = []  # [{"time": str, "direction": str, "content": str}]
@@ -136,6 +142,7 @@ class MacOSSerialUI(QWidget):
         self.line_status_timer = QTimer(self)
         self.line_status_timer.setInterval(250)
         self.line_status_timer.timeout.connect(self.update_line_states)
+        self.line_status_timer.timeout.connect(self.update_session_overview)
         self.line_status_timer.start()
         self.apply_macos_style()
         self.connect_signals()
@@ -249,6 +256,7 @@ class MacOSSerialUI(QWidget):
         self.timestamp_check.setVisible(not state.compact_toolbar)
         self.autoscroll_check.setVisible(not state.compact_toolbar)
         self.export_btn.setVisible(not state.compact_toolbar)
+        QTimer.singleShot(0, self._update_message_widths)
 
     def _position_edge_buttons(self):
         """Place collapse handles on the current pane boundaries."""
@@ -526,6 +534,14 @@ class MacOSSerialUI(QWidget):
             control_row.addWidget(button)
         line_card_layout.addLayout(control_row)
         layout.addWidget(self.line_control_card)
+
+        self.session_overview = SessionOverviewCard()
+        self.session_overview.marker_requested.connect(self.add_session_marker)
+        self.session_overview.pause_toggled.connect(
+            lambda paused: self.pause_display_btn.setChecked(paused)
+        )
+        self.session_overview.clear_requested.connect(self.clear_display)
+        layout.addWidget(self.session_overview)
         layout.addStretch()
         
         return sidebar
@@ -1170,6 +1186,7 @@ class MacOSSerialUI(QWidget):
         accent_pressed = palette.accent_pressed
         danger = palette.danger
         danger_hover = palette.danger_hover
+        sent_bubble_bg = with_alpha(palette.accent, 0.88)
         
         self.setStyleSheet(f"""
             QWidget {{
@@ -1789,6 +1806,122 @@ class MacOSSerialUI(QWidget):
                 border-radius: 10px;
             }}
 
+            #sessionOverviewCard {{
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 {glass.highlight}, stop: 0.18 {elevated_bg}, stop: 1 {elevated_bg}
+                );
+                border: 1px solid {glass.separator};
+                border-radius: 11px;
+            }}
+
+            #sessionDuration {{
+                color: {secondary_text};
+                background: transparent;
+                font-size: 10px;
+            }}
+
+            #sessionMetric {{
+                background-color: {glass.surface};
+                border: 1px solid {glass.separator};
+                border-radius: 7px;
+            }}
+
+            #sessionMetricTitle {{
+                color: {tertiary_text};
+                background: transparent;
+                font-size: 8px;
+                font-weight: 600;
+            }}
+
+            #sessionMetricValue {{
+                color: {text_color};
+                background: transparent;
+                font-size: 9px;
+                font-weight: 600;
+            }}
+
+            QPushButton#sessionActionButton {{
+                background-color: {button_bg};
+                color: {text_color};
+                border: 1px solid {glass.separator};
+                border-radius: 7px;
+                padding: 5px 2px;
+                font-size: 9px;
+            }}
+
+            QPushButton#sessionActionButton:hover {{
+                background-color: {button_hover};
+                border-color: {accent};
+            }}
+
+            QPushButton#sessionActionButton:checked {{
+                background-color: {accent};
+                color: white;
+                border-color: {accent};
+            }}
+
+            #sessionMarker {{
+                color: {secondary_text};
+                background-color: {glass.button};
+                border: 1px solid {glass.separator};
+                border-radius: 10px;
+                padding: 4px 12px;
+                font-size: 10px;
+                font-weight: 600;
+            }}
+
+            #sentBubble {{
+                background-color: {sent_bubble_bg};
+                border: 1px solid {glass.highlight};
+                border-radius: 16px;
+            }}
+
+            #receivedBubble {{
+                background-color: {glass.elevated};
+                border: 1px solid {glass.border};
+                border-radius: 16px;
+            }}
+
+            #sentBubble #messageDirection,
+            #sentBubble #bubbleContent {{
+                color: #FFFFFF;
+                background: transparent;
+            }}
+
+            #sentBubble #messageByteCount,
+            #sentBubble #timestampLabel {{
+                color: rgba(255, 255, 255, 190);
+                background: transparent;
+            }}
+
+            #receivedBubble #messageDirection,
+            #receivedBubble #bubbleContent {{
+                color: {text_color};
+                background: transparent;
+            }}
+
+            #receivedBubble #messageByteCount,
+            #receivedBubble #timestampLabel {{
+                color: {secondary_text};
+                background: transparent;
+            }}
+
+            #messageMeta {{ background: transparent; border: none; }}
+            #messageDirection {{ font-size: 10px; font-weight: 700; }}
+            #messageByteCount, #timestampLabel {{ font-size: 10px; font-weight: 500; }}
+            #bubbleContent {{ font-size: 13px; font-weight: 500; }}
+            #messageCopyButton {{ background: transparent; border: none; padding: 1px; }}
+            #messageCopyButton:hover {{
+                background-color: {glass.button_hover};
+                border-radius: 5px;
+            }}
+            #copiedLabel {{
+                color: {palette.success};
+                background: transparent;
+                font-size: 10px;
+            }}
+
             #connectionSummary {{
                 color: {secondary_text};
                 font-size: 10px;
@@ -2257,7 +2390,14 @@ class MacOSSerialUI(QWidget):
             timestamp = datetime.now().strftime("%H:%M:%S")
             
             # 创建气泡消息
-            self.add_message_bubble(display, timestamp, is_sent=True)
+            if payload is not None:
+                byte_count = len(payload)
+            else:
+                analysis = analyze_payload(text, format_type)
+                byte_count = analysis.byte_count if analysis.valid else len(text.encode("utf-8"))
+            self.add_message_bubble(
+                display, timestamp, is_sent=True, byte_count=byte_count
+            )
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -2319,164 +2459,144 @@ class MacOSSerialUI(QWidget):
                     if child.objectName() == "timestampLabel":
                         child.setVisible(show_timestamps)
     
-    def add_message_bubble(self, text: str, timestamp: str, is_sent: bool = True):
-        """添加消息气泡"""
-        # 记录消息用于导出
+    def add_message_bubble(
+        self,
+        text: str,
+        timestamp: str,
+        is_sent: bool = True,
+        byte_count: int = None,
+    ):
+        """Add a compact glass message with direction and payload metadata."""
+        direction = "发送" if is_sent else "接收"
+        byte_count = len(text.encode("utf-8")) if byte_count is None else byte_count
         self.message_log.append({
             "time": timestamp,
-            "direction": "发送" if is_sent else "接收",
+            "direction": direction,
             "content": text,
         })
 
-        # 创建消息容器（包含时间戳和气泡）
         message_container = MessageContainer()
         message_container.setProperty("message_text", text.casefold())
         container_layout = QVBoxLayout(message_container)
-        container_layout.setContentsMargins(0, 4, 0, 4)
-        container_layout.setSpacing(2)
-        
-        # 时间戳（在气泡上方）
-        time_label = QLabel(timestamp)
-        time_label.setObjectName("timestampLabel")
-        time_label.setAlignment(Qt.AlignmentFlag.AlignRight if is_sent else Qt.AlignmentFlag.AlignLeft)
-        
-        if self.timestamp_check.isChecked():
-            # 显示时间戳
-            time_label.setStyleSheet("""
-                color: #86868b;
-                font-size: 11px;
-                background: transparent;
-                padding: 2px 8px;
-            """)
-            time_label.setVisible(True)
-        else:
-            # 隐藏时间戳
-            time_label.setVisible(False)
-        
-        container_layout.addWidget(time_label)
-        
-        # 气泡容器（用于左右对齐）
+        container_layout.setContentsMargins(0, 3, 0, 3)
+        container_layout.setSpacing(0)
+
         bubble_container = QWidget()
         bubble_layout = QHBoxLayout(bubble_container)
         bubble_layout.setContentsMargins(0, 0, 0, 0)
         bubble_layout.setSpacing(0)
-        
-        # 创建气泡
+
         bubble = QFrame()
         bubble.setObjectName("sentBubble" if is_sent else "receivedBubble")
+        bubble.setMinimumWidth(128)
+        bubble.setMaximumWidth(self._message_maximum_width())
+        message_container._message_bubble = bubble
         bubble_content_layout = QVBoxLayout(bubble)
-        bubble_content_layout.setContentsMargins(14, 10, 14, 10)
-        bubble_content_layout.setSpacing(0)
-        
-        # 消息内容
+        bubble_content_layout.setContentsMargins(12, 8, 12, 9)
+        bubble_content_layout.setSpacing(5)
+
+        meta = QWidget(bubble)
+        meta.setObjectName("messageMeta")
+        meta_layout = QHBoxLayout(meta)
+        meta_layout.setContentsMargins(0, 0, 0, 0)
+        meta_layout.setSpacing(6)
+
+        direction_label = QLabel("TX" if is_sent else "RX")
+        direction_label.setObjectName("messageDirection")
+        bytes_label = QLabel(f"{byte_count} 字节")
+        bytes_label.setObjectName("messageByteCount")
+        time_label = QLabel(timestamp)
+        time_label.setObjectName("timestampLabel")
+        time_label.setVisible(self.timestamp_check.isChecked())
+        meta_layout.addWidget(direction_label)
+        meta_layout.addWidget(bytes_label)
+        meta_layout.addWidget(time_label)
+        meta_layout.addStretch()
+
+        copied_label = QLabel("已复制", meta)
+        copied_label.setObjectName("copiedLabel")
+        copied_label.setVisible(False)
+        meta_layout.addWidget(copied_label)
+
+        copy_btn = QPushButton(meta)
+        copy_btn.setObjectName("messageCopyButton")
+        copy_btn.setFixedSize(18, 18)
+        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        copy_btn.setIcon(QIcon(resource_path("src/resource/copy.png")))
+        copy_btn.setIconSize(QSize(12, 12))
+        copy_btn.setProperty("msg_text", text)
+        copy_btn.clicked.connect(self._on_copy_clicked)
+        copy_btn.setVisible(False)
+        meta_layout.addWidget(copy_btn)
+        bubble_content_layout.addWidget(meta)
+
         content_label = QLabel(text)
         content_label.setObjectName("bubbleContent")
         content_label.setWordWrap(True)
         content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble_content_layout.addWidget(content_label)
-        
-        # 设置气泡样式和对齐
-        if is_sent:
-            # 发送消息：右对齐，蓝色
-            bubble_layout.addStretch()
-            bubble_layout.addWidget(bubble)
-            sent_glass = with_alpha(palette_for(self.is_dark_mode).accent, 0.88)
-            sent_border = glass_palette(
-                palette_for(self.is_dark_mode), self.is_dark_mode
-            ).highlight
-            bubble.setStyleSheet(f"""
-                #sentBubble {{
-                    background-color: {sent_glass};
-                    border: 1px solid {sent_border};
-                    border-radius: 18px;
-                    max-width: 400px;
-                    min-width: 60px;
-                }}
-                #bubbleContent {{
-                    color: #ffffff;
-                    font-size: 14px;
-                    background: transparent;
-                }}
-            """)
-        else:
-            # 接收消息：左对齐，灰色
-            bubble_layout.addWidget(bubble)
-            bubble_layout.addStretch()
-            bubble_palette = palette_for(self.is_dark_mode)
-            bubble_glass = glass_palette(bubble_palette, self.is_dark_mode)
-            bubble_color = bubble_glass.elevated
-            text_color = bubble_palette.text
-            bubble.setStyleSheet(f"""
-                #receivedBubble {{
-                    background-color: {bubble_color};
-                    border: 1px solid {bubble_glass.border};
-                    border-radius: 18px;
-                    max-width: 400px;
-                    min-width: 60px;
-                }}
-                #bubbleContent {{
-                    color: {text_color};
-                    font-size: 14px;
-                    background: transparent;
-                }}
-            """)
-        
-        container_layout.addWidget(bubble_container)
-
-        # 复制图标行：固定高度避免悬停时布局抖动
-        copy_row = QWidget()
-        copy_row.setFixedHeight(20)
-        copy_row_layout = QHBoxLayout(copy_row)
-        copy_row_layout.setContentsMargins(4, 0, 4, 0)
-        copy_row_layout.setSpacing(0)
-
-        copy_btn = QPushButton(copy_row)
-        copy_btn.setFixedSize(16, 16)
-        copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        icon_path = resource_path("src/resource/copy.png")
-        copy_btn.setIcon(QIcon(icon_path))
-        copy_btn.setIconSize(QSize(13, 13))
-        copy_btn.setStyleSheet("QPushButton { background: transparent; border: none; }")
-        copy_btn.setVisible(False)
-
-        copied_label = QLabel("已复制", copy_row)
-        copied_label.setStyleSheet("color: #34c759; font-size: 11px; background: transparent;")
-        copied_label.setVisible(False)
-
-        # 把 text 存到按钮属性上，避免闭包问题
-        copy_btn.setProperty("msg_text", text)
-        copy_btn.clicked.connect(self._on_copy_clicked)
 
         if is_sent:
-            copy_row_layout.addStretch()
-            copy_row_layout.addWidget(copied_label)
-            copy_row_layout.addWidget(copy_btn)
+            bubble_layout.addStretch()
+            bubble_layout.addWidget(bubble)
         else:
-            copy_row_layout.addWidget(copy_btn)
-            copy_row_layout.addWidget(copied_label)
-            copy_row_layout.addStretch()
+            bubble_layout.addWidget(bubble)
+            bubble_layout.addStretch()
 
-        # 把 copy_btn / copied_label 存到 message_container 上供 hover 使用
         message_container.set_copy_widgets(copy_btn, copied_label)
+        container_layout.addWidget(bubble_container)
+        self._insert_message_widget(message_container)
 
-        container_layout.addWidget(copy_row)
+    def _message_maximum_width(self):
+        viewport_width = self.scroll_area.viewport().width()
+        return max(260, int(viewport_width * 0.72))
 
-        # 插入到消息列表（在stretch之前）
-        count = self.messages_layout.count()
-        self.messages_layout.insertWidget(count - 1, message_container)
+    def _update_message_widths(self):
+        maximum = self._message_maximum_width()
+        for index in range(self.messages_layout.count()):
+            item = self.messages_layout.itemAt(index)
+            container = item.widget() if item else None
+            bubble = getattr(container, "_message_bubble", None)
+            if bubble is not None:
+                bubble.setMaximumWidth(maximum)
 
+    def _insert_message_widget(self, widget):
+        self.messages_layout.insertWidget(self.messages_layout.count() - 1, widget)
         max_records = max(100, int(self.config.get("display.max_records", 1000)))
         while len(self.message_log) > max_records:
             self.message_log.pop(0)
             oldest = self.messages_layout.takeAt(0)
             if oldest and oldest.widget():
                 oldest.widget().deleteLater()
-        
-        # 自动滚动到底部
         if self.autoscroll_check.isChecked():
-            QTimer.singleShot(50, lambda: self.scroll_area.verticalScrollBar().setValue(
+            QTimer.singleShot(30, lambda: self.scroll_area.verticalScrollBar().setValue(
                 self.scroll_area.verticalScrollBar().maximum()
             ))
+
+    def add_session_marker(self):
+        note, accepted = QInputDialog.getText(
+            self, "添加会话标记", "备注：", text="手动标记"
+        )
+        if not accepted:
+            return
+        self.insert_session_marker(note)
+
+    def insert_session_marker(self, note: str, timestamp: str = None):
+        timestamp = timestamp or datetime.now().strftime("%H:%M:%S")
+        note = str(note).strip() or "手动标记"
+        self.message_log.append({
+            "time": timestamp, "direction": "标记", "content": note
+        })
+        container = MessageContainer()
+        container.setProperty("message_text", note.casefold())
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 5, 0, 5)
+        layout.addStretch()
+        label = QLabel(f"◆  {timestamp}  ·  {note}")
+        label.setObjectName("sessionMarker")
+        layout.addWidget(label)
+        layout.addStretch()
+        self._insert_message_widget(container)
 
     def _on_copy_clicked(self):
         """复制按钮点击处理"""
@@ -2486,15 +2606,10 @@ class MacOSSerialUI(QWidget):
         msg_text = btn.property("msg_text")
         if msg_text:
             QApplication.clipboard().setText(msg_text)
-        # 找到同级的 copied_label（btn 和 label 在同一个 copy_row 里）
-        copy_row = btn.parent()
-        if copy_row is None:
+        metadata = btn.parent()
+        if metadata is None:
             return
-        copied_label = None
-        for child in copy_row.children():
-            if isinstance(child, QLabel):
-                copied_label = child
-                break
+        copied_label = metadata.findChild(QLabel, "copiedLabel")
         if copied_label is None:
             return
         btn.setVisible(False)
@@ -2560,6 +2675,10 @@ class MacOSSerialUI(QWidget):
     def toggle_receive_pause(self, paused: bool):
         """Pause rendering while keeping acquisition and recording active."""
         self.receive_pause_buffer.set_paused(paused)
+        if hasattr(self, "session_overview"):
+            blocker = QSignalBlocker(self.session_overview.pause)
+            self.session_overview.set_paused(paused)
+            del blocker
         if paused:
             self.pause_display_btn.setText("继续")
             self.pause_display_btn.setToolTip("继续显示已缓存的接收数据")
@@ -2599,6 +2718,10 @@ class MacOSSerialUI(QWidget):
         self.sent_bytes = 0
         self.received_count = 0
         self.received_bytes = 0
+        self._send_rate = 0.0
+        self._receive_rate = 0.0
+        self._rate_sent_bytes = 0
+        self._rate_received_bytes = 0
         self.message_log.clear()
         self.receive_pause_buffer.clear()
         if self.pause_display_btn.isChecked():
@@ -2629,7 +2752,9 @@ class MacOSSerialUI(QWidget):
 
         try:
             timestamp = datetime.now().strftime("%H:%M:%S")
-            self.add_message_bubble(text, timestamp, is_sent=False)
+            self.add_message_bubble(
+                text, timestamp, is_sent=False, byte_count=len(data)
+            )
         except Exception:
             import traceback
             traceback.print_exc()
@@ -2660,6 +2785,7 @@ class MacOSSerialUI(QWidget):
     
     def on_device_connected(self):
         """设备已连接"""
+        self._session_started_at = time.monotonic()
         self.connecting_timer.stop()  # 停止连接动画
         self.connect_btn.setText("断开")
         self.connect_btn.setEnabled(True)
@@ -2691,6 +2817,7 @@ class MacOSSerialUI(QWidget):
     
     def on_device_disconnected(self):
         """设备已断开"""
+        self._session_started_at = None
         self.connecting_timer.stop()  # 停止连接动画
         self.connect_btn.setText("连接")
         self.connect_btn.setEnabled(True)
@@ -2742,6 +2869,31 @@ class MacOSSerialUI(QWidget):
             self.rate_stats.setText(
                 f"速率: ↓ {self._receive_rate:.0f} B/s  ↑ {self._send_rate:.0f} B/s"
             )
+        self.update_session_overview()
+
+    def update_session_overview(self):
+        if not hasattr(self, "session_overview"):
+            return
+        if self._session_started_at is None:
+            duration_text = "未连接"
+        else:
+            total = max(0, int(time.monotonic() - self._session_started_at))
+            hours, remainder = divmod(total, 3600)
+            minutes, seconds = divmod(remainder, 60)
+            duration_text = (
+                f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                if hours
+                else f"{minutes:02d}:{seconds:02d}"
+            )
+        self.session_overview.update_values(
+            duration_text,
+            self.sent_count,
+            self.sent_bytes,
+            self.received_count,
+            self.received_bytes,
+            self._send_rate,
+            self._receive_rate,
+        )
     
     def toggle_dark_mode(self):
         """切换黑夜模式"""

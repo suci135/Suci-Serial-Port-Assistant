@@ -2,6 +2,8 @@
 
 ## 2026-08-01 本轮新增
 
+- [x] 左侧会话概览：时长、TX/RX 帧与字节、实时速率、暂停/清屏/标记
+- [x] TX/RX 玻璃消息头、真实字节数、内嵌复制与响应式气泡宽度
 - [x] Apple Liquid Glass 风格分层材质、Windows 11 Desktop Acrylic 与跨平台降级
 - [x] 独立 `ui/effects` 原生效果层和 `ui/design/glass` 玻璃主题令牌
 - [x] 系统程序员计算器式进制面板：四进制对照、平滑切换动画、固定位宽补码与 HEX 插入
