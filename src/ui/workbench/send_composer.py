@@ -1,17 +1,38 @@
 """Transport-agnostic send composer widget."""
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
     QComboBox,
     QFrame,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QSpinBox,
     QTextEdit,
     QVBoxLayout,
 )
+
+
+class HistoryTextEdit(QTextEdit):
+    """Compact editor with shell-like history navigation."""
+
+    history_previous = pyqtSignal()
+    history_next = pyqtSignal()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        single_line = "\n" not in self.toPlainText()
+        if single_line and event.key() == Qt.Key.Key_Up:
+            self.history_previous.emit()
+            event.accept()
+            return
+        if single_line and event.key() == Qt.Key.Key_Down:
+            self.history_next.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class SendComposer(QFrame):
@@ -20,6 +41,9 @@ class SendComposer(QFrame):
     send_requested = pyqtSignal()
     repeat_toggled = pyqtSignal(int)
     interval_changed = pyqtSignal(int)
+    history_requested = pyqtSignal()
+    history_previous = pyqtSignal()
+    history_next = pyqtSignal()
 
     def __init__(self, minimum_height: int, parent=None):
         super().__init__(parent)
@@ -41,12 +65,21 @@ class SendComposer(QFrame):
         self.format_combo.setFixedHeight(42)
         input_row.addWidget(self.format_combo)
 
-        self.input = QTextEdit()
+        self.input = HistoryTextEdit()
         self.input.setObjectName("sendInput")
         self.input.setPlaceholderText("输入要发送的数据…")
         self.input.setFixedHeight(42)
         self.input.setFrameShape(QFrame.Shape.NoFrame)
+        self.input.history_previous.connect(self.history_previous)
+        self.input.history_next.connect(self.history_next)
         input_row.addWidget(self.input, 1)
+
+        self.history_button = QPushButton("历史")
+        self.history_button.setObjectName("composerUtilityButton")
+        self.history_button.setFixedSize(54, 42)
+        self.history_button.setToolTip("发送历史（输入框中也可使用 ↑ / ↓）")
+        self.history_button.clicked.connect(self.history_requested)
+        input_row.addWidget(self.history_button)
 
         self.send_button = QPushButton("发送")
         self.send_button.setObjectName("primaryButton")
@@ -75,4 +108,7 @@ class SendComposer(QFrame):
         options.addWidget(self.repeat_check)
         options.addWidget(self.interval_spin)
         options.addStretch()
+        self.payload_status = QLabel("0 字节")
+        self.payload_status.setObjectName("payloadStatus")
+        options.addWidget(self.payload_status)
         layout.addLayout(options)

@@ -17,7 +17,10 @@ from ..core.app_config import AppConfig
 from ..core.quick_command_store import QuickCommandStore
 from ..core.session_recorder import SessionRecorder
 from ..core.command_sequence import CommandSequenceRunner
+from ..core.payload_codec import analyze_payload
+from ..core.receive_pause_buffer import ReceivePauseBuffer
 from ..core.resources import resource_path as get_resource_path
+from ..core.send_history import SendHistoryStore
 from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
 from .layout_metrics import (
@@ -33,7 +36,7 @@ from .layout_metrics import (
 )
 from .responsive_layout import layout_state_for_width
 from .design import palette_for
-from .workbench import SendComposer
+from .workbench import AsciiTableWidget, RadixConverterWidget, SendComposer
 
 
 def resource_path(relative_path: str) -> str:
@@ -68,6 +71,7 @@ class MacOSSerialUI(QWidget):
 
     data_sent = pyqtSignal(bytes)
     display_sent_signal = pyqtSignal(str, str)  # 新增信号：用于显示发送的数据
+    manual_send_completed = pyqtSignal(bool, int)
     
     def __init__(self, config: AppConfig, serial_mgr: SerialManager):
         super().__init__()
@@ -95,6 +99,16 @@ class MacOSSerialUI(QWidget):
         # 消息记录（用于导出）
         self.message_log = []  # [{"time": str, "direction": str, "content": str}]
         self.session_recorder = SessionRecorder()
+        self.send_history = SendHistoryStore(
+            self.config.config_dir / "send_history.json",
+            self.config.get("send.history_limit", 100),
+        )
+        self.receive_pause_buffer = ReceivePauseBuffer(
+            self.config.get("display.pause_buffer_bytes", 512 * 1024)
+        )
+        self._history_cursor = -1
+        self._history_draft = ""
+        self._restoring_history = False
 
         # 黑夜模式状态
         self.is_dark_mode = False
@@ -116,6 +130,7 @@ class MacOSSerialUI(QWidget):
         self.sequence_runner.command_sent.connect(self._on_sequence_command_sent)
         self.sequence_runner.command_result.connect(self._on_sequence_command_result)
         self.sequence_runner.completed.connect(self._on_sequence_completed)
+        self.manual_send_completed.connect(self._on_manual_send_completed)
         
         self.init_ui()
         self.line_status_timer = QTimer(self)
@@ -154,6 +169,7 @@ class MacOSSerialUI(QWidget):
         )
         self.workbench_splitter.setSizes(initial_sizes)
         main_layout.addWidget(self.workbench_splitter)
+        self.workbench_splitter.installEventFilter(self)
 
         # Persistent edge handles replace the toolbar's text panel buttons.
         # They remain available when either panel is collapsed.
@@ -204,6 +220,22 @@ class MacOSSerialUI(QWidget):
             QTimer.singleShot(0, self._position_edge_buttons)
         super().resizeEvent(event)
 
+    def showEvent(self, event):
+        """Re-anchor edge controls after the first native layout pass."""
+        super().showEvent(event)
+        QTimer.singleShot(0, self._position_edge_buttons)
+        QTimer.singleShot(50, self._position_edge_buttons)
+
+    def eventFilter(self, watched, event):
+        if (
+            hasattr(self, "workbench_splitter")
+            and watched is self.workbench_splitter
+            and event.type()
+            in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.LayoutRequest)
+        ):
+            QTimer.singleShot(0, self._position_edge_buttons)
+        return super().eventFilter(watched, event)
+
     def _apply_responsive_layout(self):
         if not hasattr(self, "workbench_splitter"):
             return
@@ -224,12 +256,14 @@ class MacOSSerialUI(QWidget):
             return
         y = max(8, (self.height() - self.left_edge_button.height()) // 2)
         left_x = (
-            self.left_sidebar.geometry().right() - self.left_edge_button.width() // 2
+            self.left_sidebar.mapTo(self, QPoint(self.left_sidebar.width(), 0)).x()
+            - self.left_edge_button.width() // 2
             if self.left_sidebar.isVisible()
             else 0
         )
         right_x = (
-            self.right_sidebar.geometry().left() - self.right_edge_button.width() // 2
+            self.right_sidebar.mapTo(self, QPoint(0, 0)).x()
+            - self.right_edge_button.width() // 2
             if self.right_sidebar.isVisible()
             else self.width() - self.right_edge_button.width()
         )
@@ -541,6 +575,13 @@ class MacOSSerialUI(QWidget):
         
         toolbar.addStretch()
 
+        self.pause_display_btn = QPushButton("暂停显示")
+        self.pause_display_btn.setObjectName("toolbarButton")
+        self.pause_display_btn.setCheckable(True)
+        self.pause_display_btn.setToolTip("暂停界面刷新，但继续接收并记录数据")
+        self.pause_display_btn.toggled.connect(self.toggle_receive_pause)
+        toolbar.addWidget(self.pause_display_btn)
+
         # 清除按钮
         self.clear_btn = QPushButton("清除")
         self.clear_btn.setObjectName("secondaryButton")
@@ -621,16 +662,101 @@ class MacOSSerialUI(QWidget):
         composer.send_requested.connect(self.send_data)
         composer.repeat_toggled.connect(self.toggle_repeat_send)
         composer.interval_changed.connect(self.update_repeat_interval)
+        composer.history_requested.connect(self.show_send_history)
+        composer.history_previous.connect(lambda: self.recall_send_history(1))
+        composer.history_next.connect(lambda: self.recall_send_history(-1))
 
         # Compatibility aliases keep the existing communication logic stable.
         self.send_format_combo = composer.format_combo
         self.send_input = composer.input
         self.send_btn = composer.send_button
+        self.send_history_btn = composer.history_button
+        self.payload_status = composer.payload_status
         self.add_carriage = composer.add_carriage
         self.add_newline = composer.add_newline
         self.repeat_check = composer.repeat_check
         self.repeat_interval_spin = composer.interval_spin
+        self.send_input.textChanged.connect(self._on_send_input_changed)
+        self.send_format_combo.currentTextChanged.connect(self.update_send_analysis)
+        self.add_carriage.toggled.connect(self.update_send_analysis)
+        self.add_newline.toggled.connect(self.update_send_analysis)
+        QTimer.singleShot(0, self.update_send_analysis)
         return composer
+
+    def _on_send_input_changed(self):
+        if not self._restoring_history:
+            self._history_cursor = -1
+            self._history_draft = self.send_input.toPlainText()
+        self.update_send_analysis()
+
+    def update_send_analysis(self):
+        analysis = analyze_payload(
+            self.send_input.toPlainText(),
+            self.send_format_combo.currentText(),
+            self.add_carriage.isChecked(),
+            self.add_newline.isChecked(),
+        )
+        if analysis.valid:
+            self.payload_status.setObjectName("payloadStatus")
+            self.payload_status.setText(f"{analysis.byte_count} 字节")
+            self.payload_status.setToolTip("实际发送的字节数（包含行尾符）")
+        else:
+            self.payload_status.setObjectName("payloadStatusError")
+            self.payload_status.setText("格式错误")
+            self.payload_status.setToolTip(analysis.error)
+        self.payload_status.style().unpolish(self.payload_status)
+        self.payload_status.style().polish(self.payload_status)
+
+    def _restore_history_entry(self, entry):
+        self._restoring_history = True
+        self.send_format_combo.setCurrentText(entry["format"])
+        self.send_input.setPlainText(entry["text"])
+        self.send_input.moveCursor(QTextCursor.MoveOperation.End)
+        self._restoring_history = False
+        self.update_send_analysis()
+        self.send_input.setFocus()
+
+    def recall_send_history(self, direction: int):
+        entries = self.send_history.recent()
+        if not entries:
+            return
+        if direction > 0:
+            if self._history_cursor < 0:
+                self._history_draft = self.send_input.toPlainText()
+            self._history_cursor = min(self._history_cursor + 1, len(entries) - 1)
+            self._restore_history_entry(entries[self._history_cursor])
+        elif self._history_cursor > 0:
+            self._history_cursor -= 1
+            self._restore_history_entry(entries[self._history_cursor])
+        elif self._history_cursor == 0:
+            self._history_cursor = -1
+            self._restoring_history = True
+            self.send_input.setPlainText(self._history_draft)
+            self._restoring_history = False
+            self.update_send_analysis()
+
+    def show_send_history(self):
+        menu = QMenu(self)
+        entries = self.send_history.recent()
+        if not entries:
+            empty = menu.addAction("暂无发送历史")
+            empty.setEnabled(False)
+        for entry in entries[:20]:
+            preview = " ".join(entry["text"].split())
+            if len(preview) > 42:
+                preview = preview[:42] + "…"
+            action = menu.addAction(f'[{entry["format"]}]  {preview}')
+            action.triggered.connect(
+                lambda _checked=False, item=entry: self._restore_history_entry(item)
+            )
+        if entries:
+            menu.addSeparator()
+            clear_action = menu.addAction("清空发送历史")
+            clear_action.triggered.connect(self.send_history.clear)
+        position = self.send_history_btn.mapToGlobal(
+            QPoint(0, self.send_history_btn.height())
+        )
+        menu.exec(position)
 
     def create_right_sidebar(self):
         """Create the context inspector for parameters and commands."""
@@ -675,6 +801,15 @@ class MacOSSerialUI(QWidget):
         self.create_quick_input_panel(commands_layout)
         tabs.addTab(commands_tab, "命令")
 
+        self.ascii_table = AsciiTableWidget()
+        self.ascii_table.insert_text_requested.connect(self.insert_ascii_text)
+        self.ascii_table.insert_hex_requested.connect(self.insert_ascii_hex)
+        tabs.addTab(self.ascii_table, "ASCII")
+
+        self.radix_converter = RadixConverterWidget()
+        self.radix_converter.insert_hex_requested.connect(self.insert_ascii_hex)
+        tabs.addTab(self.radix_converter, "进制")
+
         layout.addWidget(tabs, 1)
         
         # 底部按钮区域
@@ -712,6 +847,48 @@ class MacOSSerialUI(QWidget):
         layout.addLayout(bottom_buttons)
         
         return sidebar
+
+    def insert_ascii_text(self, text: str):
+        """Insert a printable ASCII character using the active send format."""
+        if self.send_format_combo.currentText() == "HEX":
+            self._append_hex_bytes(text.encode("ascii"))
+        else:
+            self.send_input.insertPlainText(text)
+            self.send_input.setFocus()
+
+    def insert_ascii_hex(self, hexadecimal: str):
+        """Convert existing input losslessly before switching to HEX."""
+        existing = self.send_input.toPlainText()
+        current_format = self.send_format_combo.currentText()
+        prefix = b""
+        if existing and current_format != "HEX":
+            analysis = analyze_payload(existing, current_format)
+            if not analysis.valid:
+                self.on_error(analysis.error)
+                return
+            prefix = analysis.payload
+        elif existing:
+            analysis = analyze_payload(existing, "HEX")
+            if not analysis.valid:
+                self.on_error(analysis.error)
+                return
+            prefix = analysis.payload
+        self.send_format_combo.setCurrentText("HEX")
+        self.send_input.setPlainText(
+            " ".join(f"{byte:02X}" for byte in prefix + bytes.fromhex(hexadecimal))
+        )
+        self.send_input.moveCursor(QTextCursor.MoveOperation.End)
+        self.send_input.setFocus()
+
+    def _append_hex_bytes(self, payload: bytes):
+        existing = analyze_payload(self.send_input.toPlainText(), "HEX")
+        if not existing.valid:
+            self.on_error(existing.error)
+            return
+        combined = existing.payload + payload
+        self.send_input.setPlainText(" ".join(f"{byte:02X}" for byte in combined))
+        self.send_input.moveCursor(QTextCursor.MoveOperation.End)
+        self.send_input.setFocus()
     
     def create_quick_input_panel(self, parent_layout):
         """创建快捷输入面板"""
@@ -1409,6 +1586,75 @@ class MacOSSerialUI(QWidget):
                 font-weight: 600;
                 margin: 4px 0px;
             }}
+
+            #hintLabel {{
+                color: {secondary_text};
+                background: transparent;
+            }}
+
+            #conversionError {{
+                color: {danger};
+                background: transparent;
+            }}
+
+            QLineEdit#radixDisplay {{
+                background: transparent;
+                color: {text_color};
+                border: none;
+                border-bottom: 1px solid {palette.separator};
+                border-radius: 0px;
+                padding: 10px 4px 12px 4px;
+                font-size: 28px;
+                font-weight: 500;
+                selection-background-color: {selection_bg};
+            }}
+
+            QFrame#baseValueRow {{
+                background: transparent;
+                border: none;
+                border-radius: 8px;
+            }}
+
+            QFrame#baseValueRow:hover {{
+                background-color: {button_hover};
+            }}
+
+            QFrame#baseSelectionIndicator {{
+                background-color: {accent};
+                border: none;
+                border-radius: 2px;
+            }}
+
+            QLabel#baseName {{
+                color: {secondary_text};
+                background: transparent;
+                font-size: 13px;
+            }}
+
+            QLabel#baseValue {{
+                color: {text_color};
+                background: transparent;
+                font-size: 13px;
+            }}
+
+            QTableWidget#asciiTable {{
+                background-color: {input_bg};
+                alternate-background-color: {bg_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 8px;
+                gridline-color: {palette.separator};
+                selection-background-color: {selection_bg};
+                selection-color: {text_color};
+            }}
+
+            QTableWidget#asciiTable QHeaderView::section {{
+                background-color: {button_bg};
+                color: {secondary_text};
+                border: none;
+                border-bottom: 1px solid {border_color};
+                padding: 6px 4px;
+            }}
             
             #sectionSeparator {{
                 background-color: {border_color};
@@ -1452,6 +1698,29 @@ class MacOSSerialUI(QWidget):
                 background-color: {palette.elevated};
                 border: 1px solid {palette.separator};
                 border-radius: 12px;
+            }}
+
+            #composerUtilityButton {{
+                background-color: {button_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 9px;
+                padding: 0px 8px;
+            }}
+
+            #composerUtilityButton:hover {{
+                background-color: {button_hover};
+                border-color: {accent};
+            }}
+
+            #payloadStatus {{
+                color: {secondary_text};
+                background: transparent;
+            }}
+
+            #payloadStatusError {{
+                color: {palette.danger};
+                background: transparent;
             }}
 
             #toolbarButton {{
@@ -1852,57 +2121,51 @@ class MacOSSerialUI(QWidget):
                 thread.start()
     
     def send_data(self):
-        """发送数据"""
-        # 获取当前管理器
+        """Validate once, then send the exact analyzed bytes."""
         manager = self.serial_manager if self.current_mode == 'serial' else self.bluetooth_manager
-        
+
         if not manager.is_connected:
             self.on_error("设备未连接")
             return
-        
-        text = self.send_input.toPlainText().strip()
+
+        text = self.send_input.toPlainText()
         if not text:
             return
-        
-        # 保存原始文本用于显示
-        display_text = text
         format_type = self.send_format_combo.currentText()
-        
-        # 先在UI显示发送的数据
-        self.display_sent_data(display_text, format_type)
-        
-        # 循环发送时保留输入内容，普通发送后清空输入框
+        analysis = analyze_payload(
+            text,
+            format_type,
+            self.add_carriage.isChecked(),
+            self.add_newline.isChecked(),
+        )
+        if not analysis.valid:
+            self.on_error(analysis.error)
+            self.update_send_analysis()
+            return
+        if not analysis.payload:
+            return
+
+        display_text = analysis.normalized if format_type == "HEX" else text
+        self.display_sent_data(display_text, format_type, analysis.payload)
+        self.send_history.add(text, format_type)
+
         if not self.repeat_check.isChecked():
             self.send_input.clear()
-        
-        # 添加换行符
-        if self.add_newline.isChecked():
-            text += '\n'
-        if self.add_carriage.isChecked():
-            text += '\r'
-        
-        # 在后台线程中发送，避免阻塞 UI
+
         import threading
+
         def send_thread():
-            success = False
-            
-            if format_type == "HEX":
-                success = manager.send_hex_string(text)
-            elif format_type == "ASCII":
-                success = manager.send_text(text, 'ascii')
-            else:  # UTF-8
-                success = manager.send_text(text, 'utf-8')
-            
-            if success:
-                # 更新统计
-                self.sent_count += 1
-                self.sent_bytes += len(text.encode('utf-8'))
-        
+            success = manager.send_data(analysis.payload)
+            self.manual_send_completed.emit(success, analysis.byte_count)
+
         thread = threading.Thread(target=send_thread, daemon=True)
         thread.start()
-        
-        # 立即更新统计
-        self.update_stats()
+
+    def _on_manual_send_completed(self, success: bool, byte_count: int):
+        if success:
+            self.sent_count += 1
+            self.sent_bytes += byte_count
+            self.update_stats()
 
     def run_enabled_commands(self):
         manager = self.serial_manager if self.current_mode == "serial" else self.bluetooth_manager
@@ -1955,9 +2218,12 @@ class MacOSSerialUI(QWidget):
         if self.repeat_timer.isActive():
             self.repeat_timer.start(interval)
     
-    def display_sent_data(self, text: str, format_type: str):
+    def display_sent_data(self, text: str, format_type: str, payload: bytes = None):
         """在数据显示区显示发送的数据 - QQ聊天样式（右对齐，蓝色气泡）"""
-        self._record_payload("发送", text, format_type)
+        if payload is None:
+            self._record_payload("发送", text, format_type)
+        else:
+            self.session_recorder.record("发送", payload)
         # 格式化显示
         if format_type == "HEX":
             try:
@@ -2176,6 +2442,13 @@ class MacOSSerialUI(QWidget):
         # 插入到消息列表（在stretch之前）
         count = self.messages_layout.count()
         self.messages_layout.insertWidget(count - 1, message_container)
+
+        max_records = max(100, int(self.config.get("display.max_records", 1000)))
+        while len(self.message_log) > max_records:
+            self.message_log.pop(0)
+            oldest = self.messages_layout.takeAt(0)
+            if oldest and oldest.widget():
+                oldest.widget().deleteLater()
         
         # 自动滚动到底部
         if self.autoscroll_check.isChecked():
@@ -2262,6 +2535,36 @@ class MacOSSerialUI(QWidget):
         wb.save(path)
         self.show_macos_alert("导出成功", f"已保存到：\n{path}")
 
+    def toggle_receive_pause(self, paused: bool):
+        """Pause rendering while keeping acquisition and recording active."""
+        self.receive_pause_buffer.set_paused(paused)
+        if paused:
+            self.pause_display_btn.setText("继续")
+            self.pause_display_btn.setToolTip("继续显示已缓存的接收数据")
+            return
+
+        data, dropped = self.receive_pause_buffer.drain()
+        self.pause_display_btn.setText("暂停显示")
+        self.pause_display_btn.setToolTip("暂停界面刷新，但继续接收并记录数据")
+        if dropped:
+            self.add_message_bubble(
+                f"暂停期间缓冲区已满，已丢弃 {dropped} 字节的早期显示数据",
+                datetime.now().strftime("%H:%M:%S"),
+                is_sent=False,
+            )
+        if data:
+            self._display_received_data(data)
+
+    def _update_pause_button(self):
+        byte_count = self.receive_pause_buffer.byte_count
+        if byte_count < 1024:
+            size = f"{byte_count} B"
+        elif byte_count < 1024 * 1024:
+            size = f"{byte_count / 1024:.1f} KB"
+        else:
+            size = f"{byte_count / (1024 * 1024):.1f} MB"
+        self.pause_display_btn.setText(f"继续 · {size}")
+
     def clear_display(self):
         """清除显示"""
         # 清除所有消息气泡
@@ -2275,6 +2578,9 @@ class MacOSSerialUI(QWidget):
         self.received_count = 0
         self.received_bytes = 0
         self.message_log.clear()
+        self.receive_pause_buffer.clear()
+        if self.pause_display_btn.isChecked():
+            self._update_pause_button()
         self.update_stats()
     
     def on_data_received(self, data: bytes):
@@ -2283,25 +2589,26 @@ class MacOSSerialUI(QWidget):
         self.received_count += 1
         self.received_bytes += len(data)
         self.update_stats()
-        
-        # 格式化显示
+
+        if not self.receive_pause_buffer.append(data):
+            self._update_pause_button()
+            return
+        self._display_received_data(data)
+
+    def _display_received_data(self, data: bytes):
+        """Format and render received bytes without changing acquisition stats."""
         format_type = self.format_combo.currentText()
-        
         if format_type == "HEX":
             text = ' '.join(f'{b:02X}' for b in data)
         elif format_type == "ASCII":
             text = data.decode('ascii', errors='replace')
         else:  # UTF-8
             text = data.decode('utf-8', errors='replace')
-        
+
         try:
-            # 获取时间戳
-            from datetime import datetime
             timestamp = datetime.now().strftime("%H:%M:%S")
-            
-            # 创建气泡消息
             self.add_message_bubble(text, timestamp, is_sent=False)
-        except Exception as e:
+        except Exception:
             import traceback
             traceback.print_exc()
     

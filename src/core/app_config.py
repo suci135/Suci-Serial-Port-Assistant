@@ -56,7 +56,11 @@ class AppConfig:
                 "timestamp_format": "%H:%M:%S.%f",
                 "max_records": 1000,
                 "auto_scroll": True,
-                "word_wrap": True
+                "word_wrap": True,
+                "pause_buffer_bytes": 524288
+            },
+            "send": {
+                "history_limit": 100
             },
             "window": {
                 "width": 1200,
