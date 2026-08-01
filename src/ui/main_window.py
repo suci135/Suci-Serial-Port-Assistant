@@ -10,14 +10,15 @@ import sys
 import asyncio
 import os
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QFrame, QSizePolicy
-from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation, QEvent
+from PyQt6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QAbstractAnimation, QEvent, QTimer
 from PyQt6.QtGui import QFont, QMouseEvent
 import qasync
 
 from src.ui.macos_ui import MacOSSerialUI
 from src.core.app_config import AppConfig
 from src.core.serial_manager import SerialManager
-from src.ui.design import palette_for
+from src.ui.design import glass_palette, palette_for
+from src.ui.effects import WindowGlassEffect
 
 
 def resource_path(relative_path: str) -> str:
@@ -32,6 +33,8 @@ class MainWindow(QMainWindow):
     def __init__(self, config: AppConfig):
         super().__init__()
         self.config = config
+        self._dark_mode = False
+        self.glass_effect = WindowGlassEffect(self)
         
         # 初始化管理器
         self.serial_manager = SerialManager()
@@ -99,6 +102,7 @@ class MainWindow(QMainWindow):
                 child.installEventFilter(self)
             self._event_filter_installed = True
         super().showEvent(event)
+        self.glass_effect.apply(self._dark_mode)
 
     def _window_edges_at(self, position):
         """Return the resize edges under a global mouse position."""
@@ -197,33 +201,34 @@ class MainWindow(QMainWindow):
     
     def apply_window_style(self):
         """应用窗口样式"""
-        palette = palette_for(False)
-        self.setStyleSheet(f"""
-            #mainContainer {{
-                background: {palette.window};
-                border: 1px solid {palette.border};
-                border-radius: 10px;
-            }}
-        """)
+        self.update_theme(False)
     
     def update_theme(self, is_dark_mode):
         """更新主题"""
+        self._dark_mode = bool(is_dark_mode)
         palette = palette_for(is_dark_mode)
+        glass = glass_palette(palette, is_dark_mode)
         
         self.setStyleSheet(f"""
             #mainContainer {{
-                background: {palette.window};
-                border: 1px solid {palette.border};
-                border-radius: 10px;
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 {glass.highlight},
+                    stop: 0.16 {glass.window},
+                    stop: 1 {glass.window}
+                );
+                border: 1px solid {glass.border};
+                border-radius: 14px;
             }}
         """)
         
         # 更新标题栏样式
         self.title_bar.setStyleSheet(f"""
             #titleBar {{
-                background-color: {palette.sidebar};
-                border-top-left-radius: 10px;
-                border-top-right-radius: 10px;
+                background-color: {glass.title};
+                border-bottom: 1px solid {glass.separator};
+                border-top-left-radius: 14px;
+                border-top-right-radius: 14px;
             }}
             .macButton {{
                 width: 12px;
@@ -248,6 +253,8 @@ class MainWindow(QMainWindow):
                 font-weight: 500;
             }}
         """)
+        if self.isVisible():
+            self.glass_effect.apply(self._dark_mode)
     
     def create_title_bar(self):
         """创建自定义标题栏"""
@@ -402,6 +409,8 @@ class MainWindow(QMainWindow):
                 self.raise_()
                 self.activateWindow()
         super().changeEvent(event)
+        if event.type() in (QEvent.Type.WindowStateChange, QEvent.Type.ActivationChange):
+            QTimer.singleShot(0, lambda: self.glass_effect.apply(self._dark_mode))
 
     def toggle_window_visibility(self):
         """任务栏点击：最小化 / 复原切换"""

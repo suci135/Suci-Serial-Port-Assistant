@@ -35,7 +35,7 @@ from .layout_metrics import (
     TOOLBAR_SPACING,
 )
 from .responsive_layout import layout_state_for_width
-from .design import palette_for
+from .design import glass_palette, palette_for, with_alpha
 from .workbench import AsciiTableWidget, RadixConverterWidget, SendComposer
 
 
@@ -1150,18 +1150,20 @@ class MacOSSerialUI(QWidget):
             font_family = "Microsoft YaHei"
         
         palette = palette_for(self.is_dark_mode)
-        bg_color = palette.surface
-        sidebar_bg = palette.sidebar
-        content_bg = palette.content
-        input_bg = palette.input
+        glass = glass_palette(palette, self.is_dark_mode)
+        bg_color = glass.surface
+        sidebar_bg = glass.sidebar
+        content_bg = glass.content
+        input_bg = glass.input
         text_color = palette.text
         secondary_text = palette.secondary_text
         tertiary_text = palette.tertiary_text
-        border_color = palette.border
-        display_bg = palette.surface
+        border_color = glass.border
+        display_bg = glass.surface
         display_text = palette.text
-        button_bg = palette.button
-        button_hover = palette.button_hover
+        button_bg = glass.button
+        button_hover = glass.button_hover
+        elevated_bg = glass.elevated
         selection_bg = palette.selection
         accent = palette.accent
         accent_hover = palette.accent_hover
@@ -1182,7 +1184,10 @@ class MacOSSerialUI(QWidget):
             }}
             
             #leftSidebar {{
-                background-color: {sidebar_bg};
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 {glass.highlight}, stop: 0.12 {sidebar_bg}, stop: 1 {sidebar_bg}
+                );
                 border-bottom-left-radius: 10px;
             }}
             
@@ -1191,7 +1196,10 @@ class MacOSSerialUI(QWidget):
             }}
             
             #rightSidebar {{
-                background-color: {sidebar_bg};
+                background: qlineargradient(
+                    x1: 1, y1: 0, x2: 0, y2: 1,
+                    stop: 0 {glass.highlight}, stop: 0.12 {sidebar_bg}, stop: 1 {sidebar_bg}
+                );
                 border-bottom-right-radius: 10px;
             }}
             
@@ -1221,7 +1229,7 @@ class MacOSSerialUI(QWidget):
                 background-color: {input_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
-                border-radius: 6px;
+                border-radius: 9px;
                 padding: 6px 10px;
                 padding-right: 30px;
                 min-height: 20px;
@@ -1235,7 +1243,7 @@ class MacOSSerialUI(QWidget):
                 background-color: {input_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
-                border-radius: 6px;
+                border-radius: 9px;
                 padding: 5px 8px;
                 min-height: 20px;
             }}
@@ -1258,7 +1266,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             QComboBox QAbstractItemView {{
-                background-color: {palette.elevated};
+                background-color: {elevated_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: 6px;
@@ -1270,7 +1278,7 @@ class MacOSSerialUI(QWidget):
                 background-color: {accent};
                 color: white;
                 border: none;
-                border-radius: 6px;
+                border-radius: 10px;
                 padding: 8px 16px;
                 font-weight: 500;
             }}
@@ -1292,7 +1300,7 @@ class MacOSSerialUI(QWidget):
                 background-color: {button_bg};
                 color: {text_color};
                 border: 1px solid {border_color};
-                border-radius: 6px;
+                border-radius: 9px;
                 padding: 6px 12px;
             }}
             
@@ -1301,7 +1309,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             #statusFrame {{
-                background-color: {palette.elevated};
+                background-color: {elevated_bg};
                 border: none;
                 border-radius: 8px;
             }}
@@ -1317,9 +1325,12 @@ class MacOSSerialUI(QWidget):
             }}
             
             #dataDisplayContainer {{
-                background-color: {display_bg};
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 {glass.highlight}, stop: 0.08 {display_bg}, stop: 1 {display_bg}
+                );
                 border: 1px solid {border_color};
-                border-radius: 12px;
+                border-radius: 16px;
                 padding: 3px;
             }}
             
@@ -1373,7 +1384,7 @@ class MacOSSerialUI(QWidget):
             
             #sendInput:focus {{
                 border: 1px solid {accent};
-                background-color: {palette.elevated};
+                background-color: {elevated_bg};
             }}
             
             #historyList {{
@@ -1482,8 +1493,8 @@ class MacOSSerialUI(QWidget):
             }}
             
             #commandRow {{
-                background-color: {palette.elevated};
-                border: 1px solid {palette.separator};
+                background-color: {elevated_bg};
+                border: 1px solid {glass.separator};
                 border-radius: 9px;
                 margin: 2px 0px;
             }}
@@ -1576,7 +1587,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             #addCommandButton:pressed {{
-                background-color: {palette.separator};
+                background-color: {glass.separator};
             }}
             
             /* 分区样式 */
@@ -1601,7 +1612,7 @@ class MacOSSerialUI(QWidget):
                 background: transparent;
                 color: {text_color};
                 border: none;
-                border-bottom: 1px solid {palette.separator};
+                border-bottom: 1px solid {glass.separator};
                 border-radius: 0px;
                 padding: 10px 4px 12px 4px;
                 font-size: 28px;
@@ -1643,7 +1654,7 @@ class MacOSSerialUI(QWidget):
                 color: {text_color};
                 border: 1px solid {border_color};
                 border-radius: 8px;
-                gridline-color: {palette.separator};
+                gridline-color: {glass.separator};
                 selection-background-color: {selection_bg};
                 selection-color: {text_color};
             }}
@@ -1671,13 +1682,13 @@ class MacOSSerialUI(QWidget):
             }}
 
             QSplitter#workbenchSplitter::handle:hover {{
-                background-color: {palette.separator};
+                background-color: {glass.separator};
             }}
 
             QPushButton#edgeToggleButton {{
-                background-color: {palette.elevated};
+                background-color: {elevated_bg};
                 color: {secondary_text};
-                border: 1px solid {palette.separator};
+                border: 1px solid {glass.separator};
                 border-radius: 10px;
                 padding: 0px;
                 font-size: 19px;
@@ -1695,9 +1706,12 @@ class MacOSSerialUI(QWidget):
             }}
 
             #sendComposer {{
-                background-color: {palette.elevated};
-                border: 1px solid {palette.separator};
-                border-radius: 12px;
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 0, y2: 1,
+                    stop: 0 {glass.highlight}, stop: 0.16 {elevated_bg}, stop: 1 {elevated_bg}
+                );
+                border: 1px solid {glass.separator};
+                border-radius: 14px;
             }}
 
             #composerUtilityButton {{
@@ -1770,8 +1784,8 @@ class MacOSSerialUI(QWidget):
             }}
 
             #lineControlCard {{
-                background-color: {palette.elevated};
-                border: 1px solid {palette.separator};
+                background-color: {elevated_bg};
+                border: 1px solid {glass.separator};
                 border-radius: 10px;
             }}
 
@@ -1818,7 +1832,7 @@ class MacOSSerialUI(QWidget):
             QPushButton#lineControlButton:disabled {{
                 color: {tertiary_text};
                 background-color: {button_bg};
-                border-color: {palette.separator};
+                border-color: {glass.separator};
             }}
 
             /* 紧凑标签样式 */
@@ -1852,7 +1866,7 @@ class MacOSSerialUI(QWidget):
             }}
             
             #refreshButton:pressed {{
-                background-color: {palette.separator};
+                background-color: {glass.separator};
             }}
             
             /* SpinBox 样式 */
@@ -2366,28 +2380,36 @@ class MacOSSerialUI(QWidget):
             # 发送消息：右对齐，蓝色
             bubble_layout.addStretch()
             bubble_layout.addWidget(bubble)
-            bubble.setStyleSheet("""
-                #sentBubble {
-                    background-color: #0071e3;
+            sent_glass = with_alpha(palette_for(self.is_dark_mode).accent, 0.88)
+            sent_border = glass_palette(
+                palette_for(self.is_dark_mode), self.is_dark_mode
+            ).highlight
+            bubble.setStyleSheet(f"""
+                #sentBubble {{
+                    background-color: {sent_glass};
+                    border: 1px solid {sent_border};
                     border-radius: 18px;
                     max-width: 400px;
                     min-width: 60px;
-                }
-                #bubbleContent {
+                }}
+                #bubbleContent {{
                     color: #ffffff;
                     font-size: 14px;
                     background: transparent;
-                }
+                }}
             """)
         else:
             # 接收消息：左对齐，灰色
             bubble_layout.addWidget(bubble)
             bubble_layout.addStretch()
-            bubble_color = "#e5e5ea" if not self.is_dark_mode else "#3a3a3c"
-            text_color = "#000000" if not self.is_dark_mode else "#ffffff"
+            bubble_palette = palette_for(self.is_dark_mode)
+            bubble_glass = glass_palette(bubble_palette, self.is_dark_mode)
+            bubble_color = bubble_glass.elevated
+            text_color = bubble_palette.text
             bubble.setStyleSheet(f"""
                 #receivedBubble {{
                     background-color: {bubble_color};
+                    border: 1px solid {bubble_glass.border};
                     border-radius: 18px;
                     max-width: 400px;
                     min-width: 60px;
