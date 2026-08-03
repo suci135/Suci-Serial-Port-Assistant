@@ -24,11 +24,8 @@ class AppConfig:
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                # 合并默认配置，确保所有必要的键都存在
-                default_config = self._get_default_config()
-                for key, value in default_config.items():
-                    if key not in config:
-                        config[key] = value
+                config = self._migrate_config(config)
+                self._merge_defaults(config, self._get_default_config())
                 return config
         except (json.JSONDecodeError, IOError):
             return self._get_default_config()
@@ -36,6 +33,7 @@ class AppConfig:
     def _get_default_config(self) -> Dict[str, Any]:
         """获取默认配置"""
         return {
+            "config_version": 2,
             "serial": {
                 "baud_rate": 9600,
                 "data_bits": 8,
@@ -51,7 +49,7 @@ class AppConfig:
                 "auto_reconnect": True
             },
             "display": {
-                "data_format": "hex",  # hex, ascii, utf8
+                "data_format": "ASCII",
                 "show_timestamp": True,
                 "timestamp_format": "%H:%M:%S.%f",
                 "max_records": 1000,
@@ -60,12 +58,10 @@ class AppConfig:
                 "pause_buffer_bytes": 524288
             },
             "send": {
-                "history_limit": 100
+                "history_limit": 100,
+                "data_format": "ASCII"
             },
             "window": {
-                "width": 1200,
-                "height": 800,
-                "maximized": False,
                 "splitter_sizes": [210, 720, 320]
             },
             "theme": {
@@ -73,6 +69,30 @@ class AppConfig:
                 "accent_color": "#007aff"
             }
         }
+
+    @classmethod
+    def _merge_defaults(cls, config: Dict[str, Any], defaults: Dict[str, Any]):
+        """Recursively add new defaults without replacing user preferences."""
+        for key, value in defaults.items():
+            if key not in config:
+                config[key] = value
+            elif isinstance(value, dict) and isinstance(config[key], dict):
+                cls._merge_defaults(config[key], value)
+
+    @staticmethod
+    def _migrate_config(config: Dict[str, Any]) -> Dict[str, Any]:
+        """Migrate settings that older releases displayed but never persisted."""
+        try:
+            version = int(config.get("config_version", 1))
+        except (TypeError, ValueError):
+            version = 1
+        if version < 2:
+            config.setdefault("display", {})["data_format"] = "ASCII"
+            config.setdefault("send", {})["data_format"] = "ASCII"
+            for obsolete in ("width", "height", "maximized"):
+                config.setdefault("window", {}).pop(obsolete, None)
+            config["config_version"] = 2
+        return config
     
     def save_config(self):
         """保存配置到文件"""

@@ -59,7 +59,7 @@ class SendComposer(QFrame):
         input_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.format_combo = QComboBox()
         self.format_combo.addItems(["HEX", "ASCII", "UTF-8"])
-        self.format_combo.setCurrentText("UTF-8")
+        self.format_combo.setCurrentText("ASCII")
         self.format_combo.setMinimumWidth(84)
         self.format_combo.setMaximumWidth(110)
         self.format_combo.setFixedHeight(42)

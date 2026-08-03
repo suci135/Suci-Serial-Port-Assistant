@@ -17,10 +17,12 @@ from ..core.app_config import AppConfig
 from ..core.quick_command_store import QuickCommandStore
 from ..core.session_recorder import SessionRecorder
 from ..core.command_sequence import CommandSequenceRunner
+from ..core.format_preferences import normalize_data_format
 from ..core.payload_codec import analyze_payload
 from ..core.receive_pause_buffer import ReceivePauseBuffer
 from ..core.resources import resource_path as get_resource_path
 from ..core.send_history import SendHistoryStore
+from ..core.time_format import millisecond_timestamp
 from ..core.serial_manager import SerialManager, SerialDevice
 from ..core.bluetooth_manager import BluetoothManager, BluetoothDevice
 from .layout_metrics import (
@@ -178,6 +180,16 @@ class MacOSSerialUI(QWidget):
         main_layout.addWidget(self.workbench_splitter)
         self.workbench_splitter.installEventFilter(self)
 
+        self.error_toast = QLabel(self)
+        self.error_toast.setObjectName("errorToast")
+        self.error_toast.setWordWrap(True)
+        self.error_toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.error_toast.setMaximumWidth(520)
+        self.error_toast.hide()
+        self._error_toast_timer = QTimer(self)
+        self._error_toast_timer.setSingleShot(True)
+        self._error_toast_timer.timeout.connect(self.error_toast.hide)
+
         # Persistent edge handles replace the toolbar's text panel buttons.
         # They remain available when either panel is collapsed.
         self.left_edge_button = QPushButton(self)
@@ -225,6 +237,8 @@ class MacOSSerialUI(QWidget):
             self._responsive_timer.start()
         if hasattr(self, "left_edge_button"):
             QTimer.singleShot(0, self._position_edge_buttons)
+        if hasattr(self, "error_toast") and self.error_toast.isVisible():
+            QTimer.singleShot(0, self._position_error_toast)
         super().resizeEvent(event)
 
     def showEvent(self, event):
@@ -257,6 +271,18 @@ class MacOSSerialUI(QWidget):
         self.autoscroll_check.setVisible(not state.compact_toolbar)
         self.export_btn.setVisible(not state.compact_toolbar)
         QTimer.singleShot(0, self._update_message_widths)
+        QTimer.singleShot(0, self._position_error_toast)
+
+    def _position_error_toast(self):
+        if not hasattr(self, "error_toast"):
+            return
+        maximum = max(260, min(520, self.center_content.width() - 32))
+        self.error_toast.setMaximumWidth(maximum)
+        self.error_toast.adjustSize()
+        center = self.center_content.mapTo(self, QPoint(0, 0)).x()
+        x = center + max(8, (self.center_content.width() - self.error_toast.width()) // 2)
+        self.error_toast.move(x, 12)
+        self.error_toast.raise_()
 
     def _position_edge_buttons(self):
         """Place collapse handles on the current pane boundaries."""
@@ -563,7 +589,9 @@ class MacOSSerialUI(QWidget):
         toolbar.addWidget(QLabel("格式:"))
         self.format_combo = QComboBox()
         self.format_combo.addItems(["HEX", "ASCII", "UTF-8"])
-        self.format_combo.setCurrentText("UTF-8")
+        self.format_combo.setCurrentText(
+            normalize_data_format(self.config.get("display.data_format", "ASCII"))
+        )
         self.format_combo.setMinimumWidth(100)
         self.format_combo.setMaximumWidth(130)
         toolbar.addWidget(self.format_combo)
@@ -572,13 +600,17 @@ class MacOSSerialUI(QWidget):
         
         # 时间戳
         self.timestamp_check = QCheckBox("显示时间戳")
-        self.timestamp_check.setChecked(True)
+        self.timestamp_check.setChecked(
+            self.config.get("display.show_timestamp", True)
+        )
         self.timestamp_check.stateChanged.connect(self.toggle_timestamps)
         toolbar.addWidget(self.timestamp_check)
         
         # 自动滚动
         self.autoscroll_check = QCheckBox("自动滚动")
-        self.autoscroll_check.setChecked(True)
+        self.autoscroll_check.setChecked(
+            self.config.get("display.auto_scroll", True)
+        )
         toolbar.addWidget(self.autoscroll_check)
 
         # 消息搜索
@@ -675,6 +707,11 @@ class MacOSSerialUI(QWidget):
     def create_send_composer(self):
         """Create the always-nearby send area below the terminal."""
         composer = SendComposer(COMPOSER_MIN_HEIGHT)
+        composer.format_combo.setCurrentText(
+            normalize_data_format(
+                self.config.get("send.data_format", "ASCII")
+            )
+        )
         composer.send_requested.connect(self.send_data)
         composer.repeat_toggled.connect(self.toggle_repeat_send)
         composer.interval_changed.connect(self.update_repeat_interval)
@@ -694,10 +731,26 @@ class MacOSSerialUI(QWidget):
         self.repeat_interval_spin = composer.interval_spin
         self.send_input.textChanged.connect(self._on_send_input_changed)
         self.send_format_combo.currentTextChanged.connect(self.update_send_analysis)
+        self.send_format_combo.currentTextChanged.connect(
+            lambda value: self._save_preference("send.data_format", value)
+        )
+        self.format_combo.currentTextChanged.connect(
+            lambda value: self._save_preference("display.data_format", value)
+        )
+        self.timestamp_check.toggled.connect(
+            lambda value: self._save_preference("display.show_timestamp", bool(value))
+        )
+        self.autoscroll_check.toggled.connect(
+            lambda value: self._save_preference("display.auto_scroll", bool(value))
+        )
         self.add_carriage.toggled.connect(self.update_send_analysis)
         self.add_newline.toggled.connect(self.update_send_analysis)
         QTimer.singleShot(0, self.update_send_analysis)
         return composer
+
+    def _save_preference(self, key: str, value):
+        self.config.set(key, value)
+        self.config.save_config()
 
     def _on_send_input_changed(self):
         if not self._restoring_history:
@@ -1625,6 +1678,16 @@ class MacOSSerialUI(QWidget):
                 background: transparent;
             }}
 
+            #errorToast {{
+                color: {text_color};
+                background-color: {glass.elevated};
+                border: 1px solid {danger};
+                border-radius: 11px;
+                padding: 8px 14px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+
             QLineEdit#radixDisplay {{
                 background: transparent;
                 color: {text_color};
@@ -2387,7 +2450,7 @@ class MacOSSerialUI(QWidget):
         try:
             # 获取时间戳
             from datetime import datetime
-            timestamp = datetime.now().strftime("%H:%M:%S")
+            timestamp = millisecond_timestamp()
             
             # 创建气泡消息
             if payload is not None:
@@ -2582,7 +2645,7 @@ class MacOSSerialUI(QWidget):
         self.insert_session_marker(note)
 
     def insert_session_marker(self, note: str, timestamp: str = None):
-        timestamp = timestamp or datetime.now().strftime("%H:%M:%S")
+        timestamp = timestamp or millisecond_timestamp()
         note = str(note).strip() or "手动标记"
         self.message_log.append({
             "time": timestamp, "direction": "标记", "content": note
@@ -2690,7 +2753,7 @@ class MacOSSerialUI(QWidget):
         if dropped:
             self.add_message_bubble(
                 f"暂停期间缓冲区已满，已丢弃 {dropped} 字节的早期显示数据",
-                datetime.now().strftime("%H:%M:%S"),
+                millisecond_timestamp(),
                 is_sent=False,
             )
         if data:
@@ -2751,7 +2814,7 @@ class MacOSSerialUI(QWidget):
             text = data.decode('utf-8', errors='replace')
 
         try:
-            timestamp = datetime.now().strftime("%H:%M:%S")
+            timestamp = millisecond_timestamp()
             self.add_message_bubble(
                 text, timestamp, is_sent=False, byte_count=len(data)
             )
@@ -2852,7 +2915,13 @@ class MacOSSerialUI(QWidget):
     
     def on_error(self, error_msg: str):
         """错误处理"""
-        self.show_macos_alert("提示", error_msg)
+        message = str(error_msg).strip()
+        if not message:
+            return
+        self.error_toast.setText(message)
+        self.error_toast.show()
+        self._position_error_toast()
+        self._error_toast_timer.start(3200)
     
     def update_stats(self):
         """更新统计信息"""
