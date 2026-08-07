@@ -53,9 +53,13 @@ class AppConfig:
                 "show_timestamp": True,
                 "timestamp_format": "%H:%M:%S.%f",
                 "max_records": 1000,
+                "max_visible_messages": 250,
                 "auto_scroll": True,
                 "word_wrap": True,
-                "pause_buffer_bytes": 524288
+                "pause_buffer_bytes": 524288,
+                "render_buffer_bytes": 1048576,
+                "render_batch_bytes": 65536,
+                "render_interval_ms": 24
             },
             "send": {
                 "history_limit": 100,

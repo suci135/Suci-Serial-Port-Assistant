@@ -20,6 +20,7 @@ from ..core.command_sequence import CommandSequenceRunner
 from ..core.format_preferences import normalize_data_format
 from ..core.payload_codec import analyze_payload
 from ..core.receive_pause_buffer import ReceivePauseBuffer
+from ..core.receive_render_buffer import ReceiveRenderBuffer
 from ..core.resources import resource_path as get_resource_path
 from ..core.send_history import SendHistoryStore
 from ..core.time_format import millisecond_timestamp
@@ -57,20 +58,46 @@ class MessageContainer(QWidget):
         super().__init__(parent)
         self._copy_btn = None
         self._copied_label = None
+        self._action_stack = None
+        self._action_effect = None
 
-    def set_copy_widgets(self, copy_btn, copied_label):
+    def set_copy_widgets(self, copy_btn, copied_label, action_stack, action_effect):
         self._copy_btn = copy_btn
         self._copied_label = copied_label
+        self._action_stack = action_stack
+        self._action_effect = action_effect
+        self._set_copy_action_visible(False)
+
+    def _set_copy_action_visible(self, visible: bool):
+        if self._copy_btn is not None:
+            self._copy_btn.setEnabled(visible)
+        if self._action_effect is not None:
+            self._action_effect.setOpacity(1.0 if visible else 0.0)
 
     def enterEvent(self, event):
-        if self._copy_btn and self._copied_label and not self._copied_label.isVisible():
-            self._copy_btn.setVisible(True)
+        if self._action_stack is not None and self._copy_btn is not None:
+            self._action_stack.setCurrentWidget(self._copy_btn)
+            self._set_copy_action_visible(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        if self._copy_btn:
-            self._copy_btn.setVisible(False)
+        if self._action_stack is not None and self._copy_btn is not None:
+            if self._action_stack.currentWidget() is self._copy_btn:
+                self._set_copy_action_visible(False)
         super().leaveEvent(event)
+
+    def show_copied_feedback(self):
+        if self._action_stack is None or self._copied_label is None:
+            return
+        self._action_stack.setCurrentWidget(self._copied_label)
+        self._set_copy_action_visible(True)
+        QTimer.singleShot(1200, self._restore_copy_action)
+
+    def _restore_copy_action(self):
+        if self._action_stack is None or self._copy_btn is None:
+            return
+        self._action_stack.setCurrentWidget(self._copy_btn)
+        self._set_copy_action_visible(self.underMouse())
 
 
 class MacOSSerialUI(QWidget):
@@ -114,6 +141,15 @@ class MacOSSerialUI(QWidget):
         self.receive_pause_buffer = ReceivePauseBuffer(
             self.config.get("display.pause_buffer_bytes", 512 * 1024)
         )
+        self.receive_render_buffer = ReceiveRenderBuffer(
+            self.config.get("display.render_buffer_bytes", 1024 * 1024)
+        )
+        self._receive_render_timer = QTimer(self)
+        self._receive_render_timer.setSingleShot(True)
+        self._receive_render_timer.setInterval(
+            max(8, int(self.config.get("display.render_interval_ms", 24)))
+        )
+        self._receive_render_timer.timeout.connect(self._flush_receive_render_buffer)
         self._history_cursor = -1
         self._history_draft = ""
         self._restoring_history = False
@@ -630,6 +666,12 @@ class MacOSSerialUI(QWidget):
         self.pause_display_btn.toggled.connect(self.toggle_receive_pause)
         toolbar.addWidget(self.pause_display_btn)
 
+        self.copy_all_btn = QPushButton("复制全部")
+        self.copy_all_btn.setObjectName("secondaryButton")
+        self.copy_all_btn.setToolTip("复制接收区内保留的全部接收消息")
+        self.copy_all_btn.clicked.connect(self.copy_all_received_messages)
+        toolbar.addWidget(self.copy_all_btn)
+
         # 清除按钮
         self.clear_btn = QPushButton("清除")
         self.clear_btn.setObjectName("secondaryButton")
@@ -677,6 +719,20 @@ class MacOSSerialUI(QWidget):
         
         self.scroll_area.setWidget(self.messages_widget)
         display_container_layout.addWidget(self.scroll_area)
+
+        self._scroll_animation = QPropertyAnimation(
+            self.scroll_area.verticalScrollBar(), b"value", self
+        )
+        self._scroll_animation.setDuration(140)
+        self._scroll_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._scroll_animation.finished.connect(self._finish_smooth_scroll)
+        self._scroll_request_timer = QTimer(self)
+        self._scroll_request_timer.setSingleShot(True)
+        self._scroll_request_timer.setInterval(24)
+        self._scroll_request_timer.timeout.connect(self._smooth_scroll_to_bottom)
+        self.scroll_area.verticalScrollBar().rangeChanged.connect(
+            self._schedule_smooth_scroll
+        )
         
         layout.addWidget(display_container, 1)
 
@@ -1681,12 +1737,15 @@ class MacOSSerialUI(QWidget):
             #errorToast {{
                 color: {text_color};
                 background-color: {glass.elevated};
-                border: 1px solid {danger};
+                border: 1px solid {glass.border};
                 border-radius: 11px;
                 padding: 8px 14px;
                 font-size: 11px;
                 font-weight: 600;
             }}
+
+            #errorToast[tone="error"] {{ border-color: {danger}; }}
+            #errorToast[tone="info"] {{ border-color: {accent}; }}
 
             QLineEdit#radixDisplay {{
                 background: transparent;
@@ -2538,18 +2597,18 @@ class MacOSSerialUI(QWidget):
             "content": text,
         })
 
-        message_container = MessageContainer()
+        message_container = MessageContainer(self.messages_widget)
         message_container.setProperty("message_text", text.casefold())
         container_layout = QVBoxLayout(message_container)
         container_layout.setContentsMargins(0, 3, 0, 3)
         container_layout.setSpacing(0)
 
-        bubble_container = QWidget()
+        bubble_container = QWidget(message_container)
         bubble_layout = QHBoxLayout(bubble_container)
         bubble_layout.setContentsMargins(0, 0, 0, 0)
         bubble_layout.setSpacing(0)
 
-        bubble = QFrame()
+        bubble = QFrame(bubble_container)
         bubble.setObjectName("sentBubble" if is_sent else "receivedBubble")
         bubble.setMinimumWidth(128)
         bubble.setMaximumWidth(self._message_maximum_width())
@@ -2564,11 +2623,13 @@ class MacOSSerialUI(QWidget):
         meta_layout.setContentsMargins(0, 0, 0, 0)
         meta_layout.setSpacing(6)
 
-        direction_label = QLabel("TX" if is_sent else "RX")
+        direction_label = QLabel("TX" if is_sent else "RX", meta)
         direction_label.setObjectName("messageDirection")
-        bytes_label = QLabel(f"{byte_count} 字节")
+        bytes_label = QLabel(f"{byte_count} 字节", meta)
         bytes_label.setObjectName("messageByteCount")
-        time_label = QLabel(timestamp)
+        # The parent must be assigned before setVisible(). On Windows, showing a
+        # parentless label creates a native top-level window for one layout pass.
+        time_label = QLabel(timestamp, meta)
         time_label.setObjectName("timestampLabel")
         time_label.setVisible(self.timestamp_check.isChecked())
         meta_layout.addWidget(direction_label)
@@ -2576,24 +2637,35 @@ class MacOSSerialUI(QWidget):
         meta_layout.addWidget(time_label)
         meta_layout.addStretch()
 
-        copied_label = QLabel("已复制", meta)
-        copied_label.setObjectName("copiedLabel")
-        copied_label.setVisible(False)
-        meta_layout.addWidget(copied_label)
+        action_slot = QWidget(meta)
+        action_slot.setFixedSize(42, 18)
+        action_effect = QGraphicsOpacityEffect(action_slot)
+        action_slot.setGraphicsEffect(action_effect)
+        action_stack = QStackedLayout(action_slot)
+        action_stack.setContentsMargins(0, 0, 0, 0)
+        action_stack.setStackingMode(QStackedLayout.StackingMode.StackOne)
 
-        copy_btn = QPushButton(meta)
+        copied_label = QLabel("已复制", action_slot)
+        copied_label.setObjectName("copiedLabel")
+        copied_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        copy_btn = QPushButton(action_slot)
         copy_btn.setObjectName("messageCopyButton")
         copy_btn.setFixedSize(18, 18)
         copy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        copy_btn.setIcon(QIcon(resource_path("src/resource/copy.png")))
+        if not hasattr(self, "_message_copy_icon"):
+            self._message_copy_icon = QIcon(resource_path("src/resource/copy.png"))
+        copy_btn.setIcon(self._message_copy_icon)
         copy_btn.setIconSize(QSize(12, 12))
         copy_btn.setProperty("msg_text", text)
         copy_btn.clicked.connect(self._on_copy_clicked)
-        copy_btn.setVisible(False)
-        meta_layout.addWidget(copy_btn)
+        action_stack.addWidget(copy_btn)
+        action_stack.addWidget(copied_label)
+        action_stack.setCurrentWidget(copy_btn)
+        meta_layout.addWidget(action_slot)
         bubble_content_layout.addWidget(meta)
 
-        content_label = QLabel(text)
+        content_label = QLabel(text, bubble)
         content_label.setObjectName("bubbleContent")
         content_label.setWordWrap(True)
         content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -2606,7 +2678,9 @@ class MacOSSerialUI(QWidget):
             bubble_layout.addWidget(bubble)
             bubble_layout.addStretch()
 
-        message_container.set_copy_widgets(copy_btn, copied_label)
+        message_container.set_copy_widgets(
+            copy_btn, copied_label, action_stack, action_effect
+        )
         container_layout.addWidget(bubble_container)
         self._insert_message_widget(message_container)
 
@@ -2628,13 +2702,42 @@ class MacOSSerialUI(QWidget):
         max_records = max(100, int(self.config.get("display.max_records", 1000)))
         while len(self.message_log) > max_records:
             self.message_log.pop(0)
+        max_visible = max(
+            50, int(self.config.get("display.max_visible_messages", 250))
+        )
+        while self.messages_layout.count() - 1 > max_visible:
             oldest = self.messages_layout.takeAt(0)
             if oldest and oldest.widget():
                 oldest.widget().deleteLater()
         if self.autoscroll_check.isChecked():
-            QTimer.singleShot(30, lambda: self.scroll_area.verticalScrollBar().setValue(
-                self.scroll_area.verticalScrollBar().maximum()
-            ))
+            if not self._scroll_request_timer.isActive():
+                self._scroll_request_timer.start()
+
+    def _smooth_scroll_to_bottom(self):
+        if not self.autoscroll_check.isChecked():
+            return
+        scroll_bar = self.scroll_area.verticalScrollBar()
+        destination = scroll_bar.maximum()
+        if destination <= scroll_bar.value():
+            return
+        if self._scroll_animation.state() == QAbstractAnimation.State.Running:
+            self._scroll_animation.setEndValue(destination)
+            return
+        self._scroll_animation.setStartValue(scroll_bar.value())
+        self._scroll_animation.setEndValue(destination)
+        self._scroll_animation.start()
+
+    def _schedule_smooth_scroll(self, _minimum=0, _maximum=0):
+        """Wait for the scroll range to settle before animating to its end."""
+        if self.autoscroll_check.isChecked() and not self._scroll_request_timer.isActive():
+            self._scroll_request_timer.start()
+
+    def _finish_smooth_scroll(self):
+        if not self.autoscroll_check.isChecked():
+            return
+        scroll_bar = self.scroll_area.verticalScrollBar()
+        if scroll_bar.value() < scroll_bar.maximum():
+            QTimer.singleShot(0, self._smooth_scroll_to_bottom)
 
     def add_session_marker(self):
         note, accepted = QInputDialog.getText(
@@ -2650,12 +2753,12 @@ class MacOSSerialUI(QWidget):
         self.message_log.append({
             "time": timestamp, "direction": "标记", "content": note
         })
-        container = MessageContainer()
+        container = MessageContainer(self.messages_widget)
         container.setProperty("message_text", note.casefold())
         layout = QHBoxLayout(container)
         layout.setContentsMargins(0, 5, 0, 5)
         layout.addStretch()
-        label = QLabel(f"◆  {timestamp}  ·  {note}")
+        label = QLabel(f"◆  {timestamp}  ·  {note}", container)
         label.setObjectName("sessionMarker")
         layout.addWidget(label)
         layout.addStretch()
@@ -2669,18 +2772,24 @@ class MacOSSerialUI(QWidget):
         msg_text = btn.property("msg_text")
         if msg_text:
             QApplication.clipboard().setText(msg_text)
-        metadata = btn.parent()
-        if metadata is None:
+        parent = btn.parentWidget()
+        while parent is not None and not isinstance(parent, MessageContainer):
+            parent = parent.parentWidget()
+        if isinstance(parent, MessageContainer):
+            parent.show_copied_feedback()
+
+    def copy_all_received_messages(self):
+        """Copy all retained RX payloads without adding UI work per message."""
+        contents = [
+            message["content"]
+            for message in self.message_log
+            if message.get("direction") == "接收"
+        ]
+        if not contents:
+            self.on_error("接收区暂无可复制的消息")
             return
-        copied_label = metadata.findChild(QLabel, "copiedLabel")
-        if copied_label is None:
-            return
-        btn.setVisible(False)
-        copied_label.setVisible(True)
-        QTimer.singleShot(1500, lambda: (
-            copied_label.setVisible(False),
-            btn.setVisible(True),
-        ))
+        QApplication.clipboard().setText("\n".join(contents))
+        self._show_toast(f"已复制 {len(contents)} 条接收消息", "info")
     
     
     def export_to_excel(self):
@@ -2787,6 +2896,10 @@ class MacOSSerialUI(QWidget):
         self._rate_received_bytes = 0
         self.message_log.clear()
         self.receive_pause_buffer.clear()
+        self.receive_render_buffer.clear()
+        self._receive_render_timer.stop()
+        self._scroll_request_timer.stop()
+        self._scroll_animation.stop()
         if self.pause_display_btn.isChecked():
             self._update_pause_button()
         self.update_stats()
@@ -2801,7 +2914,29 @@ class MacOSSerialUI(QWidget):
         if not self.receive_pause_buffer.append(data):
             self._update_pause_button()
             return
-        self._display_received_data(data)
+        self._queue_received_data(data)
+
+    def _queue_received_data(self, data: bytes):
+        """Coalesce bursty receive events before constructing expensive widgets."""
+        self.receive_render_buffer.append(data)
+        if not self._receive_render_timer.isActive():
+            self._receive_render_timer.start()
+
+    def _flush_receive_render_buffer(self):
+        maximum = max(
+            1024, int(self.config.get("display.render_batch_bytes", 64 * 1024))
+        )
+        data, dropped = self.receive_render_buffer.drain(maximum)
+        if dropped:
+            self.add_message_bubble(
+                f"界面渲染繁忙，已跳过 {dropped} 字节的早期显示数据",
+                millisecond_timestamp(),
+                is_sent=False,
+            )
+        if data:
+            self._display_received_data(data)
+        if self.receive_render_buffer.byte_count:
+            self._receive_render_timer.start()
 
     def _display_received_data(self, data: bytes):
         """Format and render received bytes without changing acquisition stats."""
@@ -2918,7 +3053,14 @@ class MacOSSerialUI(QWidget):
         message = str(error_msg).strip()
         if not message:
             return
+        self._show_toast(message, "error")
+
+    def _show_toast(self, message: str, tone: str = "info"):
+        """Reuse one in-app toast so notifications never create native windows."""
+        self.error_toast.setProperty("tone", tone)
         self.error_toast.setText(message)
+        self.error_toast.style().unpolish(self.error_toast)
+        self.error_toast.style().polish(self.error_toast)
         self.error_toast.show()
         self._position_error_toast()
         self._error_toast_timer.start(3200)
