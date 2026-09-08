@@ -3,7 +3,8 @@
 from pathlib import Path
 
 block_cipher = None
-ROOT = Path(__file__).resolve().parent.parent
+# PyInstaller executes spec files with SPECPATH instead of __file__.
+ROOT = Path(SPECPATH).parent
 
 a = Analysis(
     [str(ROOT / 'main.py')],
