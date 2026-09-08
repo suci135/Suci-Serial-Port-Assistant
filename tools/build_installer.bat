@@ -1,6 +1,6 @@
 @echo off
 setlocal EnableExtensions
-cd /d "%~dp0"
+cd /d "%~dp0.."
 chcp 65001 >nul
 set "APP_VERSION=1.0.0"
 title Suci串口助手 - 生成安装包
@@ -55,7 +55,7 @@ echo 完成！
 echo.
 
 echo [4/6] PyInstaller 打包...
-pyinstaller build.spec --clean
+python -m PyInstaller tools\build.spec --clean
 if errorlevel 1 (
     echo 打包失败！请检查错误信息。
     pause
@@ -75,7 +75,7 @@ if not defined ISCC for /f "delims=" %%I in ('where iscc 2^>nul') do if not defi
 if defined ISCC (
     echo [6/6] 生成安装包...
     if not exist installer_output mkdir installer_output
-    "%ISCC%" "/DMyAppVersion=%APP_VERSION%" installer.iss
+    "%ISCC%" "/DMyAppVersion=%APP_VERSION%" tools\installer.iss
     if errorlevel 1 (
         echo Inno Setup 编译失败！
         pause
@@ -110,11 +110,33 @@ endlocal
 exit /b 0
 
 :check_environment
-echo 正在检查打包环境...
-where python >nul 2>&1 || (echo [失败] 未找到 Python & exit /b 1)
-where pyinstaller >nul 2>&1 || (echo [失败] 未找到 PyInstaller & exit /b 1)
-if not exist "installer.iss" (echo [失败] 缺少 installer.iss & exit /b 1)
-if not exist "build.spec" (echo [失败] 缺少 build.spec & exit /b 1)
-if not exist "tools\generate_installer_assets.py" (echo [失败] 缺少安装器资源生成脚本 & exit /b 1)
-echo [通过] Python、PyInstaller 和打包脚本均可用。
+echo Checking build environment...
+where python >nul 2>&1
+if errorlevel 1 goto missing_python
+python -m PyInstaller --version >nul 2>&1
+if errorlevel 1 goto missing_pyinstaller
+if not exist "tools\installer.iss" goto missing_installer
+if not exist "tools\build.spec" goto missing_spec
+if not exist "tools\generate_installer_assets.py" goto missing_assets
+echo [OK] Build environment is ready.
 exit /b 0
+
+:missing_python
+echo [ERROR] Python was not found.
+exit /b 1
+
+:missing_pyinstaller
+echo [ERROR] PyInstaller was not found in this Python environment.
+exit /b 1
+
+:missing_installer
+echo [ERROR] tools\installer.iss is missing.
+exit /b 1
+
+:missing_spec
+echo [ERROR] tools\build.spec is missing.
+exit /b 1
+
+:missing_assets
+echo [ERROR] tools\generate_installer_assets.py is missing.
+exit /b 1

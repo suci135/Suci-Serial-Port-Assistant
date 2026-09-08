@@ -5,7 +5,7 @@
 #define MyAppPublisher "Suci"
 #define MyAppExeName "Suci串口助手.exe"
 #ifndef MyAppDir
-  #define MyAppDir "dist\Suci串口助手"
+  #define MyAppDir "..\dist\Suci串口助手"
 #endif
 
 [Setup]
@@ -16,18 +16,18 @@ AppPublisher={#MyAppPublisher}
 AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-OutputDir=installer_output
+OutputDir=..\installer_output
 OutputBaseFilename=Suci串口助手_安装包_v{#MyAppVersion}
-SetupIconFile=src\resource\Assistant.ico
+SetupIconFile=..\src\resource\Assistant.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=dynamic
 WizardSizePercent=100
-WizardImageFile=build_assets\installer\wizard-light.png
-WizardImageFileDynamicDark=build_assets\installer\wizard-dark.png
-WizardSmallImageFile=build_assets\installer\wizard-small-light.png
-WizardSmallImageFileDynamicDark=build_assets\installer\wizard-small-dark.png
+WizardImageFile=..\build_assets\installer\wizard-light.png
+WizardImageFileDynamicDark=..\build_assets\installer\wizard-dark.png
+WizardSmallImageFile=..\build_assets\installer\wizard-small-light.png
+WizardSmallImageFileDynamicDark=..\build_assets\installer\wizard-small-dark.png
 DisableWelcomePage=no
 DisableProgramGroupPage=yes
 ShowTasksTreeLines=no

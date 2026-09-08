@@ -35,10 +35,10 @@ python main.py
 ## 打包安装包
 
 1. 安装 [Inno Setup](https://jrsoftware.org/isdl.php)
-2. 运行 `build_installer.bat`
+2. 运行 `tools\\build_installer.bat`
 3. 安装包生成在 `installer_output\` 目录
 
-打包脚本会自动生成浅色/深色安装向导视觉资源，并在常见安装路径中查找 Inno Setup。发布新版本时只需修改 `build_installer.bat` 顶部的 `APP_VERSION`。
+打包脚本会自动生成浅色/深色安装向导视觉资源，并在常见安装路径中查找 Inno Setup。发布新版本时只需修改 `tools/build_installer.bat` 顶部的 `APP_VERSION`。
 
 ## 项目结构
 
@@ -47,9 +47,10 @@ python main.py
 ├── main.py                  # 兼容启动入口
 ├── requirements.txt         # 依赖列表
 ├── quick_commands.json      # 内置快捷命令
-├── build_installer.bat      # 一键打包脚本
-├── build.spec               # PyInstaller 配置
-├── installer.iss            # Inno Setup 安装包配置
+├── tools/                   # 构建、安装与维护工具
+│   ├── build_installer.bat  # 一键打包脚本
+│   ├── build.spec           # PyInstaller 配置
+│   └── installer.iss        # Inno Setup 安装包配置
 └── src/
     ├── app.py                  # 应用组装与事件循环
     ├── core/

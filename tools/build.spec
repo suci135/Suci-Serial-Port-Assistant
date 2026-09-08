@@ -1,15 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
 block_cipher = None
+ROOT = Path(__file__).resolve().parent.parent
 
 a = Analysis(
-    ['main.py'],
-    pathex=[],
+    [str(ROOT / 'main.py')],
+    pathex=[str(ROOT)],
     binaries=[],
     datas=[
-        ('src/resource/*.png', 'src/resource'),
-        ('src/resource/*.ttf', 'src/resource'),
-        ('quick_commands.json', '.'),
+        (str(ROOT / 'src/resource/*.png'), 'src/resource'),
+        (str(ROOT / 'src/resource/*.ttf'), 'src/resource'),
+        (str(ROOT / 'quick_commands.json'), '.'),
     ],
     hiddenimports=[
         'PyQt6.QtCore',
@@ -57,7 +60,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='src/resource/Assistant.ico',
+    icon=str(ROOT / 'src/resource/Assistant.ico'),
 )
 
 coll = COLLECT(
