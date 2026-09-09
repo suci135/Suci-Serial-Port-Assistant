@@ -39,7 +39,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-python tools\generate_installer_assets.py
+python scripts\generate_installer_assets.py
 if errorlevel 1 (
     echo 安装向导视觉资源生成失败。
     pause
@@ -55,7 +55,7 @@ echo 完成！
 echo.
 
 echo [4/6] PyInstaller 打包...
-python -m PyInstaller tools\build.spec --clean
+python -m PyInstaller scripts\build.spec --clean
 if errorlevel 1 (
     echo 打包失败！请检查错误信息。
     pause
@@ -75,7 +75,7 @@ if not defined ISCC for /f "delims=" %%I in ('where iscc 2^>nul') do if not defi
 if defined ISCC (
     echo [6/6] 生成安装包...
     if not exist installer_output mkdir installer_output
-    "%ISCC%" "/DMyAppVersion=%APP_VERSION%" tools\installer.iss
+    "%ISCC%" "/DMyAppVersion=%APP_VERSION%" scripts\installer.iss
     if errorlevel 1 (
         echo Inno Setup 编译失败！
         pause
@@ -115,9 +115,9 @@ where python >nul 2>&1
 if errorlevel 1 goto missing_python
 python -m PyInstaller --version >nul 2>&1
 if errorlevel 1 goto missing_pyinstaller
-if not exist "tools\installer.iss" goto missing_installer
-if not exist "tools\build.spec" goto missing_spec
-if not exist "tools\generate_installer_assets.py" goto missing_assets
+if not exist "scripts\installer.iss" goto missing_installer
+if not exist "scripts\build.spec" goto missing_spec
+if not exist "scripts\generate_installer_assets.py" goto missing_assets
 echo [OK] Build environment is ready.
 exit /b 0
 
@@ -130,13 +130,13 @@ echo [ERROR] PyInstaller was not found in this Python environment.
 exit /b 1
 
 :missing_installer
-echo [ERROR] tools\installer.iss is missing.
+echo [ERROR] scripts\installer.iss is missing.
 exit /b 1
 
 :missing_spec
-echo [ERROR] tools\build.spec is missing.
+echo [ERROR] scripts\build.spec is missing.
 exit /b 1
 
 :missing_assets
-echo [ERROR] tools\generate_installer_assets.py is missing.
+echo [ERROR] scripts\generate_installer_assets.py is missing.
 exit /b 1
