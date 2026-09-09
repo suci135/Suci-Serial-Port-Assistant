@@ -2846,18 +2846,27 @@ class MacOSSerialUI(QWidget):
         })
 
         message_container = MessageContainer(self.messages_widget)
+        message_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         message_container.setProperty("message_text", text.casefold())
         container_layout = QVBoxLayout(message_container)
         container_layout.setContentsMargins(0, 3, 0, 3)
         container_layout.setSpacing(0)
 
         bubble_container = QWidget(message_container)
+        bubble_container.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
         bubble_layout = QHBoxLayout(bubble_container)
         bubble_layout.setContentsMargins(0, 0, 0, 0)
         bubble_layout.setSpacing(0)
 
         bubble = QFrame(bubble_container)
         bubble.setObjectName("sentBubble" if is_sent else "receivedBubble")
+        bubble.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         bubble.setMinimumWidth(128)
         bubble.setMaximumWidth(self._message_maximum_width())
         message_container._message_bubble = bubble

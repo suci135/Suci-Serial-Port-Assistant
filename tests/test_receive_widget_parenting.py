@@ -55,6 +55,27 @@ class ReceiveWidgetParentingTests(unittest.TestCase):
                 self.app.removeEventFilter(probe)
                 window.close()
 
+    def test_short_received_message_does_not_expand_to_scroll_area_height(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = AppConfig.__new__(AppConfig)
+            config.config_dir = Path(directory)
+            config.config_file = config.config_dir / "config.json"
+            config._config = config._get_default_config()
+            window = MainWindow(config)
+            try:
+                window.resize(1100, 700)
+                window.show()
+                self.app.processEvents()
+                window.ui._display_received_data(b"OK")
+                self.app.processEvents()
+                message = window.ui.messages_layout.itemAt(0).widget()
+                self.assertLess(
+                    message.height(),
+                    window.ui.scroll_area.viewport().height() // 2,
+                )
+            finally:
+                window.close()
+
 
 if __name__ == "__main__":
     unittest.main()
