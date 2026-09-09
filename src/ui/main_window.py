@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Suci串口助手 - Python 版本
-BaudDance Serial Assistant - Python Version
+Drift的综合调试助手 - Python 版本
 
 基于 PyQt6 的现代化串口调试工具，macOS 原生风格
 """
@@ -45,7 +44,7 @@ class MainWindow(QMainWindow):
         self.setMouseTracking(True)
         
         # 设置窗口
-        self.setWindowTitle("Suci的串口/蓝牙助手")
+        self.setWindowTitle("Drift的综合调试助手")
         self.setMinimumSize(760, 520)
         self.resize(1180, 760)
         
@@ -334,7 +333,7 @@ class MainWindow(QMainWindow):
         
         # 中间标题
         layout.addStretch()
-        title_label = QLabel("Suci的串口/蓝牙助手")
+        title_label = QLabel("Drift的综合调试助手")
         title_label.setObjectName("titleLabel")
         layout.addWidget(title_label)
         layout.addStretch()

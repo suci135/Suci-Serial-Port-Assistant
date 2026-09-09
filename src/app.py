@@ -16,7 +16,7 @@ from .ui.main_window import MainWindow
 def main() -> None:
     """Create the application and start its Qt/asyncio event loop."""
     app = QApplication(sys.argv)
-    app.setApplicationName("Serial Port Assistant")
+    app.setApplicationName("Drift的综合调试助手")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("BaudDance")
 

@@ -3,12 +3,12 @@ setlocal EnableExtensions
 cd /d "%~dp0.."
 chcp 65001 >nul
 set "APP_VERSION=1.0.0"
-title Suci串口助手 - 生成安装包
+title Drift的综合调试助手 - 生成安装包
 
 if /i "%~1"=="--check" goto check_environment
 
 echo ========================================
-echo    Suci串口助手 v%APP_VERSION% - 生成安装包
+echo    Drift的综合调试助手 v%APP_VERSION% - 生成安装包
 echo ========================================
 echo.
 
@@ -81,10 +81,10 @@ if defined ISCC (
         pause
         exit /b 1
     )
-    if exist "installer_output\Suci串口助手_安装包_v%APP_VERSION%.exe" (
+    if exist "installer_output\Drift的综合调试助手_安装包_v%APP_VERSION%.exe" (
         echo.
         echo ========================================
-        echo 安装包已生成：installer_output\Suci串口助手_安装包_v%APP_VERSION%.exe
+        echo 安装包已生成：installer_output\Drift的综合调试助手_安装包_v%APP_VERSION%.exe
         echo ========================================
         explorer installer_output
     ) else (
@@ -96,7 +96,7 @@ if defined ISCC (
     echo.
     echo ========================================
     echo PyInstaller 打包完成！
-    echo 程序目录：dist\Suci串口助手\
+    echo 程序目录：dist\Drift的综合调试助手\
     echo.
     echo 若要生成安装包，请先安装 Inno Setup：
     echo https://jrsoftware.org/isdl.php

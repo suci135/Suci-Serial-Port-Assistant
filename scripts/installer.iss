@@ -1,11 +1,11 @@
-#define MyAppName "Suci串口助手"
+#define MyAppName "Drift的综合调试助手"
 #ifndef MyAppVersion
   #define MyAppVersion "1.0.0"
 #endif
-#define MyAppPublisher "Suci"
-#define MyAppExeName "Suci串口助手.exe"
+#define MyAppPublisher "Drift"
+#define MyAppExeName "Drift的综合调试助手.exe"
 #ifndef MyAppDir
-  #define MyAppDir "..\dist\Suci串口助手"
+  #define MyAppDir "..\dist\Drift的综合调试助手"
 #endif
 
 [Setup]
@@ -17,7 +17,7 @@ AppVerName={#MyAppName} {#MyAppVersion}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputDir=..\installer_output
-OutputBaseFilename=Suci串口助手_安装包_v{#MyAppVersion}
+OutputBaseFilename=Drift的综合调试助手_安装包_v{#MyAppVersion}
 SetupIconFile=..\src\resource\Assistant.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
